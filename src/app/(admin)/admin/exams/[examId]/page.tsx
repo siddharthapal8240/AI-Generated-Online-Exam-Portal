@@ -73,6 +73,7 @@ export default async function ExamDetailPage({
           examId={exam.id}
           currentStatus={exam.status}
           hasQuestions={hasQuestions}
+          questionMode={(exam as any).questionMode || "PRE_GENERATED"}
         />
       </div>
 

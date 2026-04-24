@@ -35,6 +35,7 @@ interface ExamStatusActionsProps {
   examId: string;
   currentStatus: string;
   hasQuestions: boolean;
+  questionMode: string;
 }
 
 const STATUS_TRANSITIONS: Record<
@@ -109,7 +110,7 @@ const STATUS_TRANSITIONS: Record<
   ],
 };
 
-export function ExamStatusActions({ examId, currentStatus, hasQuestions }: ExamStatusActionsProps) {
+export function ExamStatusActions({ examId, currentStatus, hasQuestions, questionMode }: ExamStatusActionsProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{
     label: string;
@@ -151,7 +152,8 @@ export function ExamStatusActions({ examId, currentStatus, hasQuestions }: ExamS
         {/* Primary action buttons */}
         {transitions.map((t) => {
           const Icon = t.icon;
-          const needsQuestions = (t.target === "LIVE" || t.target === "SCHEDULED") && !hasQuestions;
+          // Dynamic mode doesn't need pre-generated questions — they're generated per user on start
+          const needsQuestions = (t.target === "LIVE" || t.target === "SCHEDULED") && !hasQuestions && questionMode !== "DYNAMIC";
 
           return (
             <Button
