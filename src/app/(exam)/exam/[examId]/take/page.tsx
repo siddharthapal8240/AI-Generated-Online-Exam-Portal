@@ -67,23 +67,55 @@ export default function TakeExamPage() {
         });
         let startData = await startRes.json();
 
-        // Step 2: If Dynamic mode — generate questions first, then retry
+        // Step 2: If Dynamic mode — generate questions topic by topic
         if (!startData.success && startData.needsGeneration) {
-          setLoadingMessage("Preparing your unique question set... This may take a minute.");
+          setLoadingMessage("Preparing your unique question set...");
 
-          const genRes = await fetch(`/api/exams/${examId}/generate-for-user`, {
+          // Get pending topic configs
+          const configRes = await fetch(`/api/exams/${examId}/generate-for-user`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
           });
-          const genData = await genRes.json();
+          const configData = await configRes.json();
 
-          if (!genData.success) {
-            setError(genData.error || "Failed to generate questions");
+          if (!configData.success || !configData.data?.configs?.length) {
+            setError("No topics configured for this exam");
             setLoading(false);
             return;
           }
 
-          setLoadingMessage(`Generated ${genData.data.totalGenerated} questions. Starting exam...`);
+          const configs = configData.data.configs;
+          let totalGenerated = 0;
+
+          // Generate ONE topic at a time (each fits in 10s Vercel Hobby limit)
+          for (let i = 0; i < configs.length; i++) {
+            const c = configs[i];
+            setLoadingMessage(
+              `Generating questions: ${c.topicName} (${i + 1}/${configs.length})...`,
+            );
+
+            const genRes = await fetch(`/api/exams/${examId}/generate-for-user`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ topicConfigId: c.id }),
+            });
+            const genData = await genRes.json();
+
+            if (genData.success) {
+              totalGenerated += genData.data.generated;
+            } else {
+              console.error(`Failed to generate for ${c.topicName}:`, genData.error);
+            }
+          }
+
+          if (totalGenerated === 0) {
+            setError("Failed to generate any questions. Please try again.");
+            setLoading(false);
+            return;
+          }
+
+          setLoadingMessage(`Generated ${totalGenerated} questions. Starting exam...`);
 
           // Retry session start now that questions exist
           startRes = await fetch("/api/exam-session", {
