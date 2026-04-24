@@ -67,74 +67,72 @@ export default function TakeExamPage() {
         });
         let startData = await startRes.json();
 
-        // Step 2: Dynamic mode — generate ALL questions first, then start
+        // Step 2: Dynamic mode — trigger background generation, poll until done
         if (!startData.success && startData.needsGeneration) {
           setLoadingMessage("Preparing your unique question set...");
 
-          // Get topic list and create generation job
-          const initRes = await fetch(`/api/exams/${examId}/generate-for-user`, {
+          // Kick off generation (Trigger.dev job or fallback)
+          const triggerRes = await fetch(`/api/exams/${examId}/generate-for-user`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "start" }),
           });
-          const initData = await initRes.json();
+          const triggerData = await triggerRes.json();
 
-          if (!initData.success) {
-            setError(initData.error || "Failed to prepare questions");
+          if (!triggerData.success) {
+            setError(triggerData.error || "Failed to start generation");
             setLoading(false);
             return;
           }
 
-          // Already generated previously
-          if (initData.data.status === "ALREADY_DONE") {
-            setLoadingMessage("Questions ready. Starting exam...");
-          } else if (initData.data.status === "READY") {
-            // Generate each topic one by one (each ~8s, within 10s Vercel limit)
-            const topicsList = initData.data.topics;
-            let totalGenerated = 0;
+          // If already completed (from previous attempt)
+          if (triggerData.data.status === "COMPLETED") {
+            setLoadingMessage(`${triggerData.data.totalGenerated} questions ready. Starting exam...`);
+          } else {
+            // Poll until generation is complete
+            const jobId = triggerData.data.jobId;
+            let done = false;
 
-            for (let i = 0; i < topicsList.length; i++) {
-              const t = topicsList[i];
-              setLoadingMessage(
-                `Generating: ${t.topicName} (${i + 1}/${topicsList.length})`,
+            while (!done) {
+              await new Promise((r) => setTimeout(r, 2000)); // Poll every 2s
+
+              const pollRes = await fetch(
+                `/api/exams/${examId}/generate-for-user?jobId=${jobId}`,
               );
+              const pollData = await pollRes.json();
 
-              try {
-                const genRes = await fetch(
-                  `/api/exams/${examId}/generate-for-user`,
-                  {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ topicConfigId: t.configId }),
-                  },
-                );
-                const genData = await genRes.json();
-
-                if (genData.success) {
-                  totalGenerated += genData.data.generated;
-                  setLoadingMessage(
-                    `Generated ${totalGenerated} questions (${i + 1}/${topicsList.length} topics done)`,
-                  );
-                } else {
-                  console.error(`Failed: ${t.topicName}`, genData.error);
-                }
-              } catch (genErr) {
-                console.error(`Error generating ${t.topicName}:`, genErr);
+              if (!pollData.success) {
+                setError("Failed to check generation status");
+                setLoading(false);
+                return;
               }
-            }
 
-            if (totalGenerated === 0) {
-              setError("Failed to generate questions. Please try again.");
-              setLoading(false);
-              return;
-            }
+              const job = pollData.data;
 
-            setLoadingMessage(
-              `All ${totalGenerated} questions generated! Starting exam...`,
-            );
+              if (job.status === "IN_PROGRESS") {
+                const progress = job.totalTopics > 0
+                  ? `(${job.completedTopics}/${job.totalTopics} topics)`
+                  : "";
+                setLoadingMessage(
+                  `Generating questions${job.currentTopic ? `: ${job.currentTopic}` : ""} ${progress}`,
+                );
+              } else if (job.status === "COMPLETED") {
+                setLoadingMessage(
+                  `All ${job.totalGenerated} questions generated! Starting exam...`,
+                );
+                done = true;
+              } else if (job.status === "FAILED") {
+                const errMsg = job.errors?.length > 0
+                  ? job.errors[0]
+                  : "Generation failed";
+                setError(errMsg);
+                setLoading(false);
+                return;
+              }
+              // PENDING — keep polling
+            }
           }
 
-          // Now start the session — questions are in the DB
+          // Now start the session — all questions are in the DB
           startRes = await fetch("/api/exam-session", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
