@@ -67,57 +67,74 @@ export default function TakeExamPage() {
         });
         let startData = await startRes.json();
 
-        // Step 2: If Dynamic mode — generate questions topic by topic
+        // Step 2: Dynamic mode — generate ALL questions first, then start
         if (!startData.success && startData.needsGeneration) {
           setLoadingMessage("Preparing your unique question set...");
 
-          // Get pending topic configs
-          const configRes = await fetch(`/api/exams/${examId}/generate-for-user`, {
+          // Get topic list and create generation job
+          const initRes = await fetch(`/api/exams/${examId}/generate-for-user`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ action: "start" }),
           });
-          const configData = await configRes.json();
+          const initData = await initRes.json();
 
-          if (!configData.success || !configData.data?.configs?.length) {
-            setError("No topics configured for this exam");
+          if (!initData.success) {
+            setError(initData.error || "Failed to prepare questions");
             setLoading(false);
             return;
           }
 
-          const configs = configData.data.configs;
-          let totalGenerated = 0;
+          // Already generated previously
+          if (initData.data.status === "ALREADY_DONE") {
+            setLoadingMessage("Questions ready. Starting exam...");
+          } else if (initData.data.status === "READY") {
+            // Generate each topic one by one (each ~8s, within 10s Vercel limit)
+            const topicsList = initData.data.topics;
+            let totalGenerated = 0;
 
-          // Generate ONE topic at a time (each fits in 10s Vercel Hobby limit)
-          for (let i = 0; i < configs.length; i++) {
-            const c = configs[i];
-            setLoadingMessage(
-              `Generating questions: ${c.topicName} (${i + 1}/${configs.length})...`,
-            );
+            for (let i = 0; i < topicsList.length; i++) {
+              const t = topicsList[i];
+              setLoadingMessage(
+                `Generating: ${t.topicName} (${i + 1}/${topicsList.length})`,
+              );
 
-            const genRes = await fetch(`/api/exams/${examId}/generate-for-user`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ topicConfigId: c.id }),
-            });
-            const genData = await genRes.json();
+              try {
+                const genRes = await fetch(
+                  `/api/exams/${examId}/generate-for-user`,
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ topicConfigId: t.configId }),
+                  },
+                );
+                const genData = await genRes.json();
 
-            if (genData.success) {
-              totalGenerated += genData.data.generated;
-            } else {
-              console.error(`Failed to generate for ${c.topicName}:`, genData.error);
+                if (genData.success) {
+                  totalGenerated += genData.data.generated;
+                  setLoadingMessage(
+                    `Generated ${totalGenerated} questions (${i + 1}/${topicsList.length} topics done)`,
+                  );
+                } else {
+                  console.error(`Failed: ${t.topicName}`, genData.error);
+                }
+              } catch (genErr) {
+                console.error(`Error generating ${t.topicName}:`, genErr);
+              }
             }
+
+            if (totalGenerated === 0) {
+              setError("Failed to generate questions. Please try again.");
+              setLoading(false);
+              return;
+            }
+
+            setLoadingMessage(
+              `All ${totalGenerated} questions generated! Starting exam...`,
+            );
           }
 
-          if (totalGenerated === 0) {
-            setError("Failed to generate any questions. Please try again.");
-            setLoading(false);
-            return;
-          }
-
-          setLoadingMessage(`Generated ${totalGenerated} questions. Starting exam...`);
-
-          // Retry session start now that questions exist
+          // Now start the session — questions are in the DB
           startRes = await fetch("/api/exam-session", {
             method: "POST",
             headers: { "Content-Type": "application/json" },

@@ -51,6 +51,13 @@ export const questionModeEnum = pgEnum("question_mode", [
   "POOL_BASED",
 ]);
 
+export const generationJobStatusEnum = pgEnum("generation_job_status", [
+  "PENDING",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "FAILED",
+]);
+
 export const timeAnalysisEnum = pgEnum("time_analysis", [
   "TOO_FAST",
   "OPTIMAL",

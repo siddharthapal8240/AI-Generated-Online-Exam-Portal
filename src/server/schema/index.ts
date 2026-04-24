@@ -5,4 +5,5 @@ export * from "./exams";
 export * from "./questions";
 export * from "./exam-sessions";
 export * from "./results";
+export * from "./generation-jobs";
 export * from "./relations";
