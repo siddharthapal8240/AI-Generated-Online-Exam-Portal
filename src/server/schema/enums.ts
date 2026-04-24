@@ -45,6 +45,12 @@ export const invitationStatusEnum = pgEnum("invitation_status", [
   "EXPIRED",
 ]);
 
+export const questionModeEnum = pgEnum("question_mode", [
+  "PRE_GENERATED",
+  "DYNAMIC",
+  "POOL_BASED",
+]);
+
 export const timeAnalysisEnum = pgEnum("time_analysis", [
   "TOO_FAST",
   "OPTIMAL",

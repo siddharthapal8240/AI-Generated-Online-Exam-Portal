@@ -93,7 +93,10 @@ async function generateForTopic(
 
 export async function generateQuestionsForExam(
   examId: string,
+  options?: { multiplier?: number },
 ): Promise<GenerationResult> {
+  const multiplier = options?.multiplier || 1;
+
   const topicConfigsList = await db.query.examTopicConfigs.findMany({
     where: eq(examTopicConfigs.examId, examId),
     with: { topic: true },
@@ -111,12 +114,19 @@ export async function generateQuestionsForExam(
     };
   }
 
-  // Generate ALL topics in PARALLEL — much faster
-  console.log(`[AI] Generating questions for ${topicConfigsList.length} topics in parallel...`);
+  // Apply multiplier to question counts (for pool-based mode)
+  const adjustedConfigs = topicConfigsList.map((config) => ({
+    ...config,
+    questionCount: config.questionCount * multiplier,
+  }));
+
+  console.log(
+    `[AI] Generating questions for ${adjustedConfigs.length} topics in parallel (${multiplier}x multiplier)...`,
+  );
   const startTime = Date.now();
 
   const topicResults = await Promise.all(
-    topicConfigsList
+    adjustedConfigs
       .filter((config) => config.topic)
       .map((config) => generateForTopic(examId, config, config.topic)),
   );

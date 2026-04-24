@@ -1,6 +1,7 @@
 "use server";
 
-import { revalidatePath, revalidateTag } from "next/cache";
+import { revalidatePath } from "next/cache";
+import { getExamById } from "@/server/data-access/exams";
 import { generateQuestionsForExam } from "@/server/services/exam-question-manager";
 
 export type GenerateActionResult = {
@@ -17,9 +18,15 @@ export async function generateQuestionsAction(
   examId: string,
 ): Promise<GenerateActionResult> {
   try {
-    const result = await generateQuestionsForExam(examId);
+    // Check exam's question mode for pool multiplier
+    const exam = await getExamById(examId);
+    const questionMode = (exam as any)?.questionMode || "PRE_GENERATED";
+    const poolMultiplier = (exam as any)?.poolMultiplier || 3;
 
-    // Force revalidate all related paths
+    const multiplier = questionMode === "POOL_BASED" ? poolMultiplier : 1;
+
+    const result = await generateQuestionsForExam(examId, { multiplier });
+
     revalidatePath(`/admin/exams/${examId}`, "page");
     revalidatePath(`/admin/exams/${examId}`, "layout");
     revalidatePath("/admin/questions", "page");

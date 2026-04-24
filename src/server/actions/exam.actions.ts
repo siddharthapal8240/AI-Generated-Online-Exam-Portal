@@ -53,6 +53,8 @@ export async function createExamAction(formData: unknown): Promise<ActionResult>
       maxTabSwitches: input.maxTabSwitches,
       useAiGeneration: input.useAiGeneration,
       usePyqBank: input.usePyqBank,
+      questionMode: input.questionMode,
+      poolMultiplier: input.poolMultiplier,
       scheduledStartTime: input.scheduledStartTime ? new Date(input.scheduledStartTime) : null,
       scheduledEndTime: input.scheduledEndTime ? new Date(input.scheduledEndTime) : null,
     });

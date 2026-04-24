@@ -58,6 +58,8 @@ export default function CreateExamPage() {
       durationMinutes: 60,
       totalQuestions: 30,
       targetDifficulty: "MEDIUM",
+      questionMode: "PRE_GENERATED",
+      poolMultiplier: 3,
       useAiGeneration: true,
       usePyqBank: true,
       shuffleQuestions: true,
@@ -238,6 +240,76 @@ export default function CreateExamPage() {
         {/* Step 2: Topics */}
         {step === 1 && (
           <div className="space-y-4">
+            {/* Question Mode Selector */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Question Generation Mode</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {([
+                  {
+                    value: "PRE_GENERATED" as const,
+                    label: "Pre-Generated",
+                    desc: "Generate all questions before the exam goes live. All participants get the same question set (shuffled order).",
+                    badge: "Standard",
+                  },
+                  {
+                    value: "DYNAMIC" as const,
+                    label: "Dynamic Per-User",
+                    desc: "AI generates unique questions for each participant when they start the exam. No two users get the same paper. ~10s loading on start.",
+                    badge: "Most Private",
+                  },
+                  {
+                    value: "POOL_BASED" as const,
+                    label: "Pool-Based",
+                    desc: "Pre-generate a large pool (3-5x questions). Each participant gets a random subset. Different papers, instant start.",
+                    badge: "Recommended",
+                  },
+                ] as const).map((mode) => (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    onClick={() => setValue("questionMode", mode.value)}
+                    className={`w-full rounded-lg border p-3 text-left transition-all ${
+                      watch("questionMode") === mode.value
+                        ? "border-primary bg-primary/5 ring-2 ring-primary/20"
+                        : "border-border hover:border-primary/30"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold">{mode.label}</span>
+                      <Badge variant="outline" className="text-xs">{mode.badge}</Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{mode.desc}</p>
+                  </button>
+                ))}
+                {watch("questionMode") === "POOL_BASED" && (
+                  <div className="flex items-center gap-3 pl-2">
+                    <Label className="text-xs whitespace-nowrap">Pool size multiplier:</Label>
+                    <div className="flex gap-1">
+                      {[2, 3, 4, 5].map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setValue("poolMultiplier", n)}
+                          className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                            watch("poolMultiplier") === n
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {n}x
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      = {totalSelectedQuestions * (watch("poolMultiplier") || 3)} questions in pool
+                    </span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle>Select Subjects & Topics</CardTitle>

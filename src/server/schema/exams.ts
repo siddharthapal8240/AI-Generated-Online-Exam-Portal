@@ -9,7 +9,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { pgTable } from "drizzle-orm/pg-core";
 
-import { difficultyLevelEnum, examStatusEnum, invitationStatusEnum } from "./enums";
+import { difficultyLevelEnum, examStatusEnum, invitationStatusEnum, questionModeEnum } from "./enums";
 import { topics } from "./topics";
 import { users } from "./users";
 
@@ -41,6 +41,8 @@ export const exams = pgTable(
     maxTabSwitches: integer("max_tab_switches").default(3).notNull(),
     useAiGeneration: boolean("use_ai_generation").default(true).notNull(),
     usePyqBank: boolean("use_pyq_bank").default(true).notNull(),
+    questionMode: questionModeEnum("question_mode").default("PRE_GENERATED").notNull(),
+    poolMultiplier: integer("pool_multiplier").default(3).notNull(),
     targetDifficulty: difficultyLevelEnum("target_difficulty")
       .default("MEDIUM")
       .notNull(),
