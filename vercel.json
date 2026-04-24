@@ -1,0 +1,15 @@
+{
+  "framework": "nextjs",
+  "regions": ["bom1"],
+  "functions": {
+    "src/app/api/exams/*/generate/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/exam-session/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/exam-session/*/submit/route.ts": {
+      "maxDuration": 30
+    }
+  }
+}
