@@ -18,6 +18,7 @@ export default function TakeExamPage() {
   const router = useRouter();
   const examId = params.examId as string;
   const [loading, setLoading] = useState(true);
+  const [loadingMessage, setLoadingMessage] = useState("Loading exam...");
   const [error, setError] = useState<string | null>(null);
   const [showSubmitDialog, setShowSubmitDialog] = useState(false);
 
@@ -57,13 +58,41 @@ export default function TakeExamPage() {
       }
 
       try {
-        // Start new session
-        const startRes = await fetch("/api/exam-session", {
+        // Step 1: Try to start session
+        setLoadingMessage("Starting exam session...");
+        let startRes = await fetch("/api/exam-session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ examId }),
         });
-        const startData = await startRes.json();
+        let startData = await startRes.json();
+
+        // Step 2: If Dynamic mode — generate questions first, then retry
+        if (!startData.success && startData.needsGeneration) {
+          setLoadingMessage("Preparing your unique question set... This may take a minute.");
+
+          const genRes = await fetch(`/api/exams/${examId}/generate-for-user`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          });
+          const genData = await genRes.json();
+
+          if (!genData.success) {
+            setError(genData.error || "Failed to generate questions");
+            setLoading(false);
+            return;
+          }
+
+          setLoadingMessage(`Generated ${genData.data.totalGenerated} questions. Starting exam...`);
+
+          // Retry session start now that questions exist
+          startRes = await fetch("/api/exam-session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ examId }),
+          });
+          startData = await startRes.json();
+        }
 
         if (!startData.success) {
           setError(startData.error);
@@ -71,7 +100,8 @@ export default function TakeExamPage() {
           return;
         }
 
-        // Load session data
+        // Step 3: Load session data
+        setLoadingMessage("Loading questions...");
         const sessionRes = await fetch(
           `/api/exam-session/${startData.data.sessionId}`,
         );
@@ -124,9 +154,9 @@ export default function TakeExamPage() {
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center">
+      <div className="flex h-screen flex-col items-center justify-center gap-4">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <span className="ml-3 text-lg">Loading exam...</span>
+        <span className="text-lg">{loadingMessage}</span>
       </div>
     );
   }

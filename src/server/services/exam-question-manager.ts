@@ -93,9 +93,10 @@ async function generateForTopic(
 
 export async function generateQuestionsForExam(
   examId: string,
-  options?: { multiplier?: number },
+  options?: { multiplier?: number; overrideExamTag?: string },
 ): Promise<GenerationResult> {
   const multiplier = options?.multiplier || 1;
+  const examTag = options?.overrideExamTag || examId;
 
   const topicConfigsList = await db.query.examTopicConfigs.findMany({
     where: eq(examTopicConfigs.examId, examId),
@@ -128,7 +129,7 @@ export async function generateQuestionsForExam(
   const topicResults = await Promise.all(
     adjustedConfigs
       .filter((config) => config.topic)
-      .map((config) => generateForTopic(examId, config, config.topic)),
+      .map((config) => generateForTopic(examTag, config, config.topic)),
   );
 
   console.log(`[AI] All topics done in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);

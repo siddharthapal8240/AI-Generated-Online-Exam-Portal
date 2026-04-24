@@ -7,9 +7,8 @@ import {
   assignQuestionsToSession,
 } from "@/server/data-access/sessions";
 import { ensureUser } from "@/server/data-access/users";
-import { generateQuestionsForExam } from "@/server/services/exam-question-manager";
 import { db } from "@/server/db";
-import { questions, examTopicConfigs } from "@/server/schema";
+import { questions, examTopicConfigs, examSessions } from "@/server/schema";
 import { eq, and } from "drizzle-orm";
 
 // Fisher-Yates shuffle
@@ -28,47 +27,29 @@ export async function POST(request: NextRequest) {
     const { examId } = body;
 
     if (!examId) {
-      return NextResponse.json(
-        { success: false, error: "Missing examId" },
-        { status: 400 },
-      );
+      return NextResponse.json({ success: false, error: "Missing examId" }, { status: 400 });
     }
 
-    // Auth
     const clerkUser = await currentUser();
     if (!clerkUser) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 },
-      );
+      return NextResponse.json({ success: false, error: "Not authenticated" }, { status: 401 });
     }
 
     const dbUser = await ensureUser({
       id: clerkUser.id,
       email: clerkUser.emailAddresses[0]?.emailAddress || "",
-      name:
-        `${clerkUser.firstName || ""} ${clerkUser.lastName || ""}`.trim() ||
-        clerkUser.emailAddresses[0]?.emailAddress?.split("@")[0] ||
-        "User",
+      name: `${clerkUser.firstName || ""} ${clerkUser.lastName || ""}`.trim() || "User",
       role: "PARTICIPANT",
     });
 
     const userId = dbUser.id;
-
-    // Get exam
     const exam = await getExamById(examId);
     if (!exam) {
-      return NextResponse.json(
-        { success: false, error: "Exam not found" },
-        { status: 404 },
-      );
+      return NextResponse.json({ success: false, error: "Exam not found" }, { status: 404 });
     }
 
     if (!["LIVE", "DRAFT", "SCHEDULED"].includes(exam.status)) {
-      return NextResponse.json(
-        { success: false, error: "Exam is not available" },
-        { status: 400 },
-      );
+      return NextResponse.json({ success: false, error: "Exam is not available" }, { status: 400 });
     }
 
     // Check existing session
@@ -85,10 +66,7 @@ export async function POST(request: NextRequest) {
           },
         });
       }
-      if (
-        existing.status === "SUBMITTED" ||
-        existing.status === "AUTO_SUBMITTED"
-      ) {
+      if (existing.status === "SUBMITTED" || existing.status === "AUTO_SUBMITTED") {
         return NextResponse.json(
           { success: false, error: "You have already submitted this exam" },
           { status: 409 },
@@ -96,60 +74,33 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Create session
-    const expiresAt = new Date(Date.now() + exam.durationMinutes * 60 * 1000);
-    const session = await createExamSession({ examId, userId, expiresAt });
-
     const questionMode = (exam as any).questionMode || "PRE_GENERATED";
 
-    // ─── MODE: DYNAMIC — Generate fresh questions for THIS user ────────
+    // For DYNAMIC mode — questions must be generated first via /api/exams/[examId]/generate-for-user
+    // This route only assigns already-existing questions
     if (questionMode === "DYNAMIC") {
-      console.log(`[Session] DYNAMIC mode — generating fresh questions for user ${userId}`);
-
-      const genResult = await generateQuestionsForExam(examId);
-
-      if (genResult.totalGenerated === 0) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Failed to generate questions: ${genResult.errors.join(", ")}`,
-          },
-          { status: 500 },
-        );
-      }
-
-      // Use the freshly generated questions (they have generatedForExamId = examId)
-      // But since multiple users generate to the same exam, we need to pick only this batch
-      const freshQuestions = await db.query.questions.findMany({
-        where: and(
-          eq(questions.isActive, true),
-          // Get questions created very recently for this exam
-        ),
-        orderBy: (q, { desc }) => [desc(q.createdAt)],
-        limit: exam.totalQuestions,
-      });
-
-      // Actually, use the IDs returned from generation
-      const questionIds = genResult.questionIds.slice(0, exam.totalQuestions);
+      // Check if questions were generated for this user (stored with a user-specific tag)
+      // For dynamic, the client calls generate-for-user FIRST, then calls this route
       const generatedQuestions = await db.query.questions.findMany({
         where: and(
+          eq(questions.generatedForExamId, `${examId}_${userId}`),
           eq(questions.isActive, true),
         ),
       });
-      const selectedQuestions = generatedQuestions.filter((q) =>
-        questionIds.includes(q.id),
-      );
 
-      if (selectedQuestions.length === 0) {
+      if (generatedQuestions.length === 0) {
         return NextResponse.json(
-          { success: false, error: "No questions generated" },
-          { status: 500 },
+          { success: false, error: "NEEDS_GENERATION", needsGeneration: true },
+          { status: 400 },
         );
       }
+
+      const expiresAt = new Date(Date.now() + exam.durationMinutes * 60 * 1000);
+      const session = await createExamSession({ examId, userId, expiresAt });
 
       await assignQuestionsToSession(
         session.id,
-        selectedQuestions.map((q) => ({
+        generatedQuestions.slice(0, exam.totalQuestions).map((q) => ({
           id: q.id,
           marksForCorrect: exam.marksPerQuestion,
           marksForIncorrect: exam.negativeMarking,
@@ -167,11 +118,8 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // ─── MODE: POOL_BASED — Pick random subset from pre-generated pool ─
+    // POOL_BASED — pick random subset from pre-generated pool
     if (questionMode === "POOL_BASED") {
-      console.log(`[Session] POOL_BASED mode — picking random subset for user ${userId}`);
-
-      // Get all questions in the pool for this exam
       const pool = await db.query.questions.findMany({
         where: and(
           eq(questions.generatedForExamId, examId),
@@ -181,44 +129,31 @@ export async function POST(request: NextRequest) {
 
       if (pool.length === 0) {
         return NextResponse.json(
-          {
-            success: false,
-            error:
-              "Question pool is empty. Admin needs to generate the question pool first.",
-          },
+          { success: false, error: "Question pool is empty. Admin needs to generate questions first." },
           { status: 400 },
         );
       }
 
-      // Get topic configs to maintain topic distribution
       const topicConfigs = await db.query.examTopicConfigs.findMany({
         where: eq(examTopicConfigs.examId, examId),
       });
 
       let selectedQuestions: typeof pool = [];
-
       if (topicConfigs.length > 0) {
-        // Pick randomly per topic to maintain distribution
         for (const config of topicConfigs) {
-          const topicQuestions = pool.filter(
-            (q) => q.topicId === config.topicId,
-          );
-          const shuffled = shuffle(topicQuestions);
-          selectedQuestions.push(
-            ...shuffled.slice(0, config.questionCount),
-          );
+          const topicQuestions = pool.filter((q) => q.topicId === config.topicId);
+          selectedQuestions.push(...shuffle(topicQuestions).slice(0, config.questionCount));
         }
       } else {
-        // No topic configs, just pick randomly from full pool
         selectedQuestions = shuffle(pool).slice(0, exam.totalQuestions);
       }
 
       if (selectedQuestions.length === 0) {
-        return NextResponse.json(
-          { success: false, error: "Not enough questions in pool" },
-          { status: 400 },
-        );
+        return NextResponse.json({ success: false, error: "Not enough questions in pool" }, { status: 400 });
       }
+
+      const expiresAt = new Date(Date.now() + exam.durationMinutes * 60 * 1000);
+      const session = await createExamSession({ examId, userId, expiresAt });
 
       await assignQuestionsToSession(
         session.id,
@@ -240,9 +175,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // ─── MODE: PRE_GENERATED (default) — Same questions for all ────────
-    console.log(`[Session] PRE_GENERATED mode — assigning existing questions`);
-
+    // PRE_GENERATED (default) — same questions for all
     const questionPool = await db.query.questions.findMany({
       where: and(
         eq(questions.generatedForExamId, examId),
@@ -250,42 +183,31 @@ export async function POST(request: NextRequest) {
       ),
     });
 
-    if (questionPool.length === 0) {
-      // Fallback
-      const anyQuestions = await db.query.questions.findMany({
-        where: eq(questions.isActive, true),
-        limit: exam.totalQuestions,
-      });
+    const toAssign = questionPool.length > 0
+      ? questionPool.slice(0, exam.totalQuestions)
+      : await db.query.questions.findMany({
+          where: eq(questions.isActive, true),
+          limit: exam.totalQuestions,
+        });
 
-      if (anyQuestions.length === 0) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "No questions available. Admin needs to generate questions first.",
-          },
-          { status: 400 },
-        );
-      }
-
-      await assignQuestionsToSession(
-        session.id,
-        anyQuestions.map((q) => ({
-          id: q.id,
-          marksForCorrect: exam.marksPerQuestion,
-          marksForIncorrect: exam.negativeMarking,
-        })),
-      );
-    } else {
-      const selected = questionPool.slice(0, exam.totalQuestions);
-      await assignQuestionsToSession(
-        session.id,
-        selected.map((q) => ({
-          id: q.id,
-          marksForCorrect: exam.marksPerQuestion,
-          marksForIncorrect: exam.negativeMarking,
-        })),
+    if (toAssign.length === 0) {
+      return NextResponse.json(
+        { success: false, error: "No questions available. Admin needs to generate questions first." },
+        { status: 400 },
       );
     }
+
+    const expiresAt = new Date(Date.now() + exam.durationMinutes * 60 * 1000);
+    const session = await createExamSession({ examId, userId, expiresAt });
+
+    await assignQuestionsToSession(
+      session.id,
+      toAssign.map((q) => ({
+        id: q.id,
+        marksForCorrect: exam.marksPerQuestion,
+        marksForIncorrect: exam.negativeMarking,
+      })),
+    );
 
     return NextResponse.json({
       success: true,
@@ -298,9 +220,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("Failed to start session:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to start session" },
-      { status: 500 },
-    );
+    return NextResponse.json({ success: false, error: "Failed to start session" }, { status: 500 });
   }
 }
