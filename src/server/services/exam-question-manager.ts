@@ -1,13 +1,8 @@
 import { db } from "@/server/db";
 import { questions, examTopicConfigs, topics } from "@/server/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { validateQuestion } from "./question-generator";
-import {
-  fetchAndGenerateQuestions,
-  storePyqsInBank,
-  getPyqsFromBank,
-  isDuplicate,
-} from "./pyq-fetcher";
+import { fetchAndGenerateQuestions } from "./pyq-fetcher";
 
 export interface GenerationResult {
   examId: string;
@@ -95,20 +90,7 @@ async function generateForTopic(
       `[${topic.name}] AI returned ${fetched.questions.length} questions`,
     );
 
-    // ─── Step 2: Store ALL in permanent bank (deduped) ──────────────────
-
-    const bankResult = await storePyqsInBank(
-      fetched.questions,
-      topic.id,
-      config.difficulty,
-      fetched.model,
-    );
-
-    console.log(
-      `[${topic.name}] Stored ${bankResult.stored.length} in bank, skipped ${bankResult.skipped} duplicates`,
-    );
-
-    // ─── Step 3: Create exam-specific copies linked to this exam/user ───
+    // ─── Step 2: Store questions linked to this exam/user ──────────────
 
     for (const q of fetched.questions) {
       const validation = validateQuestion({

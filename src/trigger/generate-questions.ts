@@ -120,29 +120,7 @@ export const generateQuestionsTask = task({
               if (q.questionType === "PYQ_VARIANT") tags.push("pyq", "variant");
               if (q.questionType === "AI_EXAM_LEVEL") tags.push("ai", "exam-level");
 
-              // Store in permanent bank (no examTag)
-              try {
-                await db.insert(schema.questions).values({
-                  topicId: topic.id,
-                  source: source as any,
-                  questionText: q.questionText,
-                  optionA: q.optionA,
-                  optionB: q.optionB,
-                  optionC: q.optionC,
-                  optionD: q.optionD,
-                  correctOption: q.correctOption,
-                  explanation: q.explanation,
-                  difficulty: config.difficulty,
-                  pyqSource: q.sourceExam,
-                  pyqYear: q.year,
-                  aiModel: fetched.model,
-                  tags,
-                });
-              } catch {
-                // Ignore bank insert errors (duplicates)
-              }
-
-              // Store exam-specific copy
+              // Store question linked to this exam/user
               await db.insert(schema.questions).values({
                 topicId: topic.id,
                 source: source as any,
