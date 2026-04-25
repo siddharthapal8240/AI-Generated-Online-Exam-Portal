@@ -258,6 +258,16 @@ export default async function ExamDetailPage({
                           Q{i + 1}
                         </span>
                         <div className="flex items-center gap-2">
+                          {q.source === "PYQ" && (
+                            <Badge className="bg-purple-100 text-purple-800 text-xs">
+                              PYQ {q.pyqSource ? `— ${q.pyqSource}` : ""} {q.pyqYear || ""}
+                            </Badge>
+                          )}
+                          {q.source === "AI_GENERATED" && (
+                            <Badge variant="outline" className="text-xs text-blue-700">
+                              AI Generated
+                            </Badge>
+                          )}
                           <Badge variant="outline" className="text-xs">
                             {q.difficulty}
                           </Badge>
