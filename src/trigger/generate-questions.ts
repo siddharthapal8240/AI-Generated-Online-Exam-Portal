@@ -36,11 +36,15 @@ export const generateQuestionsTask = task({
         .set({ totalTopics: topicConfigs.length })
         .where(eq(schema.generationJobs.id, jobId));
 
-      const { generateQuestions, validateQuestion } = await import(
+      // Import the unified generator that handles PYQ + AI mix
+      const { fetchAndGenerateQuestions } = await import(
+        "../server/services/pyq-fetcher"
+      );
+      const { validateQuestion } = await import(
         "../server/services/question-generator"
       );
 
-      // Resolve parent slugs first (fast DB lookups)
+      // Resolve parent slugs
       const configsWithSlugs = await Promise.all(
         topicConfigs
           .filter((c) => c.topic)
@@ -56,35 +60,86 @@ export const generateQuestionsTask = task({
           }),
       );
 
-      // Generate ALL topics in PARALLEL — no timeout limit in Trigger.dev
+      // Generate ALL topics in PARALLEL with PYQ + AI mix
       let completedCount = 0;
+      let totalGenerated = 0;
+      let totalFailed = 0;
+      const allErrors: string[] = [];
 
       const results = await Promise.all(
         configsWithSlugs.map(async ({ config, subjectSlug }) => {
           const topic = config.topic!;
-          let generated = 0;
-          let failed = 0;
-          const errors: string[] = [];
+          const pyqPercentage = config.pyqPercentage ?? 40;
+          const pyqDirectPercent = Math.round(pyqPercentage / 2);
+          const pyqVariantPercent = pyqPercentage - pyqDirectPercent;
 
           try {
-            const result = await generateQuestions({
-              subjectSlug,
+            // Single AI call that returns PYQs + variants + AI questions
+            const fetched = await fetchAndGenerateQuestions({
               topicName: topic.name,
+              subjectSlug,
               difficulty: config.difficulty,
-              count: config.questionCount,
+              totalCount: config.questionCount,
+              pyqDirectPercent,
+              pyqVariantPercent,
             });
 
-            for (const q of result.questions) {
-              const validation = validateQuestion(q);
+            let topicGenerated = 0;
+            let topicFailed = 0;
+
+            // Store all questions
+            for (const q of fetched.questions) {
+              const validation = validateQuestion({
+                questionText: q.questionText,
+                optionA: q.optionA,
+                optionB: q.optionB,
+                optionC: q.optionC,
+                optionD: q.optionD,
+                correctOption: q.correctOption,
+                explanation: q.explanation,
+              });
+
               if (!validation.valid) {
-                failed++;
-                errors.push(`Invalid: ${validation.issues.join(", ")}`);
+                topicFailed++;
                 continue;
               }
 
+              const source =
+                q.questionType === "DIRECT_PYQ" || q.questionType === "PYQ_VARIANT"
+                  ? "PYQ"
+                  : "AI_GENERATED";
+
+              const tags: string[] = [];
+              if (q.questionType === "DIRECT_PYQ") tags.push("pyq", "direct");
+              if (q.questionType === "PYQ_VARIANT") tags.push("pyq", "variant");
+              if (q.questionType === "AI_EXAM_LEVEL") tags.push("ai", "exam-level");
+
+              // Store in permanent bank (no examTag)
+              try {
+                await db.insert(schema.questions).values({
+                  topicId: topic.id,
+                  source: source as any,
+                  questionText: q.questionText,
+                  optionA: q.optionA,
+                  optionB: q.optionB,
+                  optionC: q.optionC,
+                  optionD: q.optionD,
+                  correctOption: q.correctOption,
+                  explanation: q.explanation,
+                  difficulty: config.difficulty,
+                  pyqSource: q.sourceExam,
+                  pyqYear: q.year,
+                  aiModel: fetched.model,
+                  tags,
+                });
+              } catch {
+                // Ignore bank insert errors (duplicates)
+              }
+
+              // Store exam-specific copy
               await db.insert(schema.questions).values({
                 topicId: topic.id,
-                source: "AI_GENERATED",
+                source: source as any,
                 questionText: q.questionText,
                 optionA: q.optionA,
                 optionB: q.optionB,
@@ -93,39 +148,41 @@ export const generateQuestionsTask = task({
                 correctOption: q.correctOption,
                 explanation: q.explanation,
                 difficulty: config.difficulty,
-                aiModel: result.model,
+                pyqSource: q.sourceExam,
+                pyqYear: q.year,
+                aiModel: fetched.model,
                 generatedForExamId: examTag,
-                tags: [],
+                tags,
               });
-              generated++;
+              topicGenerated++;
             }
+
+            totalGenerated += topicGenerated;
+            totalFailed += topicFailed;
           } catch (err) {
-            failed += config.questionCount;
-            errors.push(
+            totalFailed += config.questionCount;
+            allErrors.push(
               `${topic.name}: ${err instanceof Error ? err.message : "unknown"}`,
             );
           }
 
-          // Update progress after each topic completes
+          // Update progress
           completedCount++;
           await db
             .update(schema.generationJobs)
             .set({
               completedTopics: completedCount,
               currentTopic: topic.name,
-              totalGenerated: schema.generationJobs.totalGenerated,
+              totalGenerated,
+              totalFailed,
             })
             .where(eq(schema.generationJobs.id, jobId));
 
-          return { topic: topic.name, generated, failed, errors };
+          return { topic: topic.name };
         }),
       );
 
-      // Aggregate results
-      const totalGenerated = results.reduce((s, r) => s + r.generated, 0);
-      const totalFailed = results.reduce((s, r) => s + r.failed, 0);
-      const allErrors = results.flatMap((r) => r.errors);
-
+      // Mark completed
       await db
         .update(schema.generationJobs)
         .set({
