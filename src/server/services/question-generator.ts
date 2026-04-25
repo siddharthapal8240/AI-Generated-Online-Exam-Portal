@@ -224,11 +224,98 @@ Generate exactly ${count} questions now.`;
     schema: generatedQuestionsSchema,
   });
 
+  // Verify and fix answers
+  const verifiedQuestions = await verifyQuestionAnswers(result.data.questions);
+
   return {
-    questions: result.data.questions,
+    questions: verifiedQuestions,
     model: result.model,
     provider: result.provider,
   };
+}
+
+// ─── Answer Verification ─────────────────────────────────────────────────────
+
+const verificationSchema = z.object({
+  results: z.array(
+    z.object({
+      questionIndex: z.number(),
+      calculatedAnswer: z
+        .string()
+        .describe("The actual correct answer after solving"),
+      correctOption: z
+        .enum(["A", "B", "C", "D"])
+        .describe("Which option matches the calculated answer"),
+      isOriginalCorrect: z
+        .boolean()
+        .describe("Was the original marked answer correct?"),
+    }),
+  ),
+});
+
+/**
+ * Verify each question's marked answer by re-solving.
+ * Fixes any mismatched answers.
+ */
+export async function verifyQuestionAnswers(
+  questions: GeneratedQuestion[],
+): Promise<GeneratedQuestion[]> {
+  if (questions.length === 0) return questions;
+
+  try {
+    const questionsText = questions
+      .map((q, i) => {
+        return `Q${i}: ${q.questionText}
+A: ${q.optionA}
+B: ${q.optionB}
+C: ${q.optionC}
+D: ${q.optionD}
+Marked answer: ${q.correctOption}`;
+      })
+      .join("\n\n");
+
+    const result = await generateWithFallback({
+      task: "question_validation",
+      system:
+        "You are a math verification expert. Solve each question independently and check if the marked answer is correct. If wrong, provide the correct option.",
+      prompt: `Verify each question below. For each one, solve it step by step and determine which option (A/B/C/D) is actually correct.
+
+${questionsText}
+
+Verify all ${questions.length} questions.`,
+      schema: verificationSchema,
+    });
+
+    // Apply corrections
+    const corrected = [...questions];
+    let fixCount = 0;
+
+    for (const v of result.data.results) {
+      if (
+        v.questionIndex >= 0 &&
+        v.questionIndex < corrected.length &&
+        !v.isOriginalCorrect
+      ) {
+        console.log(
+          `[Verify] Q${v.questionIndex} corrected: ${corrected[v.questionIndex].correctOption} → ${v.correctOption}`,
+        );
+        corrected[v.questionIndex] = {
+          ...corrected[v.questionIndex],
+          correctOption: v.correctOption,
+        };
+        fixCount++;
+      }
+    }
+
+    if (fixCount > 0) {
+      console.log(`[Verify] Fixed ${fixCount}/${questions.length} answers`);
+    }
+
+    return corrected;
+  } catch (err) {
+    console.error("[Verify] Verification failed, using original answers:", err);
+    return questions;
+  }
 }
 
 // ─── Validation ──────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { generateWithFallback } from "./ai-gateway";
+import { verifyQuestionAnswers } from "./question-generator";
 import { db } from "@/server/db";
 import { questions } from "@/server/schema";
 import { eq, and, ilike, or } from "drizzle-orm";
@@ -142,8 +143,27 @@ Generate exactly ${totalCount} questions now.`;
     schema: pyqSearchSchema,
   });
 
+  // Verify answers
+  const verified = await verifyQuestionAnswers(
+    result.data.questions.map((q) => ({
+      questionText: q.questionText,
+      optionA: q.optionA,
+      optionB: q.optionB,
+      optionC: q.optionC,
+      optionD: q.optionD,
+      correctOption: q.correctOption,
+      explanation: q.explanation,
+    })),
+  );
+
+  // Merge corrections back
+  const correctedQuestions = result.data.questions.map((q, i) => ({
+    ...q,
+    correctOption: verified[i]?.correctOption || q.correctOption,
+  }));
+
   return {
-    questions: result.data.questions,
+    questions: correctedQuestions,
     model: result.model,
     provider: result.provider,
   };
