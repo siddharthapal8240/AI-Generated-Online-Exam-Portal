@@ -74,7 +74,8 @@ export const generateQuestionsTask = task({
           const pyqVariantPercent = pyqPercentage - pyqDirectPercent;
 
           try {
-            // Single AI call that returns PYQs + variants + AI questions
+            console.log(`[${topic.name}] Fetching PYQs + generating (${pyqDirectPercent}% direct, ${pyqVariantPercent}% variant, ${100 - pyqPercentage}% AI)...`);
+
             const fetched = await fetchAndGenerateQuestions({
               topicName: topic.name,
               subjectSlug,
@@ -84,10 +85,15 @@ export const generateQuestionsTask = task({
               pyqVariantPercent,
             });
 
+            // Count question types
+            const directCount = fetched.questions.filter(q => q.questionType === "DIRECT_PYQ").length;
+            const variantCount = fetched.questions.filter(q => q.questionType === "PYQ_VARIANT").length;
+            const aiLevelCount = fetched.questions.filter(q => q.questionType === "AI_EXAM_LEVEL").length;
+            console.log(`[${topic.name}] Got ${directCount} direct PYQ + ${variantCount} variants + ${aiLevelCount} AI = ${fetched.questions.length} total`);
+
             let topicGenerated = 0;
             let topicFailed = 0;
 
-            // Store all questions
             for (const q of fetched.questions) {
               const validation = validateQuestion({
                 questionText: q.questionText,
