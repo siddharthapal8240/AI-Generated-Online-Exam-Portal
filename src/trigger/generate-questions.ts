@@ -4,7 +4,6 @@ import { drizzle } from "drizzle-orm/neon-http";
 import { eq } from "drizzle-orm";
 import * as schema from "../server/schema";
 
-// Inline DB connection for Trigger.dev worker (runs in separate env)
 function getDb() {
   const sql = neon(process.env.DATABASE_URL!);
   return drizzle(sql, { schema });
@@ -12,9 +11,7 @@ function getDb() {
 
 export const generateQuestionsTask = task({
   id: "generate-questions",
-  retry: {
-    maxAttempts: 2,
-  },
+  retry: { maxAttempts: 2 },
   run: async (payload: {
     jobId: string;
     examId: string;
@@ -23,14 +20,12 @@ export const generateQuestionsTask = task({
     const db = getDb();
     const { jobId, examId, examTag } = payload;
 
-    // Mark job as in progress
     await db
       .update(schema.generationJobs)
       .set({ status: "IN_PROGRESS", startedAt: new Date() })
       .where(eq(schema.generationJobs.id, jobId));
 
     try {
-      // Get topic configs
       const topicConfigs = await db.query.examTopicConfigs.findMany({
         where: eq(schema.examTopicConfigs.examId, examId),
         with: { topic: true },
@@ -41,81 +36,96 @@ export const generateQuestionsTask = task({
         .set({ totalTopics: topicConfigs.length })
         .where(eq(schema.generationJobs.id, jobId));
 
-      let totalGenerated = 0;
-      let totalFailed = 0;
-      const errors: string[] = [];
+      const { generateQuestions, validateQuestion } = await import(
+        "../server/services/question-generator"
+      );
 
-      // Generate for each topic
-      for (let i = 0; i < topicConfigs.length; i++) {
-        const config = topicConfigs[i];
-        const topic = config.topic;
-        if (!topic) continue;
-
-        // Update current topic
-        await db
-          .update(schema.generationJobs)
-          .set({
-            currentTopic: topic.name,
-            completedTopics: i,
-          })
-          .where(eq(schema.generationJobs.id, jobId));
-
-        // Find parent subject slug
-        let subjectSlug = topic.slug;
-        if (topic.parentId) {
-          const parent = await db.query.topics.findFirst({
-            where: eq(schema.topics.id, topic.parentId),
-          });
-          if (parent) subjectSlug = parent.slug;
-        }
-
-        try {
-          // Import dynamically to avoid bundling issues
-          const { generateQuestions, validateQuestion } = await import(
-            "../server/services/question-generator"
-          );
-
-          const generated = await generateQuestions({
-            subjectSlug,
-            topicName: topic.name,
-            difficulty: config.difficulty,
-            count: config.questionCount,
-          });
-
-          for (const q of generated.questions) {
-            const validation = validateQuestion(q);
-            if (!validation.valid) {
-              totalFailed++;
-              errors.push(`Invalid question for ${topic.name}: ${validation.issues.join(", ")}`);
-              continue;
+      // Resolve parent slugs first (fast DB lookups)
+      const configsWithSlugs = await Promise.all(
+        topicConfigs
+          .filter((c) => c.topic)
+          .map(async (config) => {
+            let subjectSlug = config.topic!.slug;
+            if (config.topic!.parentId) {
+              const parent = await db.query.topics.findFirst({
+                where: eq(schema.topics.id, config.topic!.parentId!),
+              });
+              if (parent) subjectSlug = parent.slug;
             }
+            return { config, subjectSlug };
+          }),
+      );
 
-            await db.insert(schema.questions).values({
-              topicId: topic.id,
-              source: "AI_GENERATED",
-              questionText: q.questionText,
-              optionA: q.optionA,
-              optionB: q.optionB,
-              optionC: q.optionC,
-              optionD: q.optionD,
-              correctOption: q.correctOption,
-              explanation: q.explanation,
+      // Generate ALL topics in PARALLEL — no timeout limit in Trigger.dev
+      let completedCount = 0;
+
+      const results = await Promise.all(
+        configsWithSlugs.map(async ({ config, subjectSlug }) => {
+          const topic = config.topic!;
+          let generated = 0;
+          let failed = 0;
+          const errors: string[] = [];
+
+          try {
+            const result = await generateQuestions({
+              subjectSlug,
+              topicName: topic.name,
               difficulty: config.difficulty,
-              aiModel: generated.model,
-              generatedForExamId: examTag,
-              tags: [],
+              count: config.questionCount,
             });
-            totalGenerated++;
-          }
-        } catch (err) {
-          totalFailed += config.questionCount;
-          errors.push(
-            `Failed for ${topic.name}: ${err instanceof Error ? err.message : "unknown"}`,
-          );
-        }
-      }
 
-      // Mark completed
+            for (const q of result.questions) {
+              const validation = validateQuestion(q);
+              if (!validation.valid) {
+                failed++;
+                errors.push(`Invalid: ${validation.issues.join(", ")}`);
+                continue;
+              }
+
+              await db.insert(schema.questions).values({
+                topicId: topic.id,
+                source: "AI_GENERATED",
+                questionText: q.questionText,
+                optionA: q.optionA,
+                optionB: q.optionB,
+                optionC: q.optionC,
+                optionD: q.optionD,
+                correctOption: q.correctOption,
+                explanation: q.explanation,
+                difficulty: config.difficulty,
+                aiModel: result.model,
+                generatedForExamId: examTag,
+                tags: [],
+              });
+              generated++;
+            }
+          } catch (err) {
+            failed += config.questionCount;
+            errors.push(
+              `${topic.name}: ${err instanceof Error ? err.message : "unknown"}`,
+            );
+          }
+
+          // Update progress after each topic completes
+          completedCount++;
+          await db
+            .update(schema.generationJobs)
+            .set({
+              completedTopics: completedCount,
+              currentTopic: topic.name,
+              totalGenerated: schema.generationJobs.totalGenerated,
+            })
+            .where(eq(schema.generationJobs.id, jobId));
+
+          return { topic: topic.name, generated, failed, errors };
+        }),
+      );
+
+      // Aggregate results
+      const totalGenerated = results.reduce((s, r) => s + r.generated, 0);
+      const totalFailed = results.reduce((s, r) => s + r.failed, 0);
+      const allErrors = results.flatMap((r) => r.errors);
+
       await db
         .update(schema.generationJobs)
         .set({
@@ -124,12 +134,12 @@ export const generateQuestionsTask = task({
           totalGenerated,
           totalFailed,
           currentTopic: null,
-          errors,
+          errors: allErrors,
           completedAt: new Date(),
         })
         .where(eq(schema.generationJobs.id, jobId));
 
-      return { totalGenerated, totalFailed, errors };
+      return { totalGenerated, totalFailed, errors: allErrors };
     } catch (err) {
       await db
         .update(schema.generationJobs)
