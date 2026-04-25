@@ -2,7 +2,6 @@
 
 import { useExamSessionStore } from "@/stores/exam-session.store";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { ArrowLeft, ArrowRight, X, Bookmark } from "lucide-react";
 import { useAnswerSync } from "@/lib/hooks/use-answer-sync";
@@ -55,16 +54,11 @@ export function QuestionPanel() {
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
       <div className="flex-1 p-4 sm:p-6">
-        {/* Question number and badge */}
+        {/* Question number */}
         <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-muted-foreground">
-              Question {currentQ.sequenceNumber} of {questions.length}
-            </span>
-            <Badge variant="outline" className="text-xs">
-              {currentQ.difficulty}
-            </Badge>
-          </div>
+          <span className="text-sm font-semibold text-muted-foreground">
+            Question {currentQ.sequenceNumber} of {questions.length}
+          </span>
           <button
             onClick={() => {
               toggleMarkForReview();
