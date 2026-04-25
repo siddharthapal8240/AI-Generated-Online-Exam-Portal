@@ -20,17 +20,21 @@ export function ExamHeader({ timer, onSubmitClick }: ExamHeaderProps) {
     useExamSessionStore();
 
   return (
-    <header className="flex h-14 items-center justify-between border-b bg-slate-900 px-4 text-white">
-      <div className="flex items-center gap-3">
-        <h1 className="text-sm font-semibold sm:text-base">{examTitle}</h1>
-      </div>
-      <div className="flex items-center gap-4">
-        <span className="hidden text-sm text-slate-300 sm:block">
-          {getAnsweredCount()}/{totalQuestions} answered
+    <header className="flex h-14 shrink-0 items-center border-b bg-slate-900 px-3 text-white sm:px-4">
+      {/* Left: Title (truncates on small screens) */}
+      <h1 className="mr-3 min-w-0 truncate text-sm font-semibold sm:text-base">
+        {examTitle}
+      </h1>
+
+      {/* Right: Timer + Submit (always visible, never wraps) */}
+      <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
+        <span className="hidden text-xs text-slate-300 sm:block">
+          {getAnsweredCount()}/{totalQuestions}
         </span>
+
         <div
           className={cn(
-            "flex items-center gap-2 rounded-md px-3 py-1.5 font-mono text-lg font-bold tabular-nums",
+            "flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-sm font-bold tabular-nums sm:px-3 sm:py-1.5 sm:text-lg",
             timer.isDanger
               ? "animate-pulse bg-red-600 text-white"
               : timer.isCritical
@@ -40,17 +44,19 @@ export function ExamHeader({ timer, onSubmitClick }: ExamHeaderProps) {
                   : "bg-slate-800 text-slate-100",
           )}
         >
-          <Clock className="h-4 w-4" />
+          <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
           {timer.formatted}
         </div>
+
         <Button
           variant="destructive"
           size="sm"
           onClick={onSubmitClick}
-          className="bg-red-600 hover:bg-red-700"
+          className="shrink-0 bg-red-600 px-3 hover:bg-red-700 sm:px-4"
         >
           <Send className="mr-1 h-3.5 w-3.5" />
-          Submit
+          <span className="hidden sm:inline">Submit</span>
+          <span className="sm:hidden">End</span>
         </Button>
       </div>
     </header>
