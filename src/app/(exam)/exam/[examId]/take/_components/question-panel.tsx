@@ -54,11 +54,23 @@ export function QuestionPanel() {
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
       <div className="flex-1 p-4 sm:p-6">
-        {/* Question number */}
+        {/* Question number + PYQ badge */}
         <div className="mb-4 flex items-center justify-between">
-          <span className="text-sm font-semibold text-muted-foreground">
-            Question {currentQ.sequenceNumber} of {questions.length}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-muted-foreground">
+              Question {currentQ.sequenceNumber} of {questions.length}
+            </span>
+            {currentQ.source === "PYQ" && currentQ.tags?.includes("direct") && (
+              <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-800">
+                PYQ {currentQ.pyqSource || ""} {currentQ.pyqYear || ""}
+              </span>
+            )}
+            {currentQ.source === "PYQ" && currentQ.tags?.includes("variant") && (
+              <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-800">
+                PYQ Variant {currentQ.pyqSource || ""}
+              </span>
+            )}
+          </div>
           <button
             onClick={() => {
               toggleMarkForReview();

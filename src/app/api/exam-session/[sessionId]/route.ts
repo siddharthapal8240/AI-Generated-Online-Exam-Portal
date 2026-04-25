@@ -27,6 +27,10 @@ export async function GET(
     optionD: eq.question.optionD,
     difficulty: eq.question.difficulty,
     topicId: eq.question.topicId,
+    source: eq.question.source,
+    pyqSource: eq.question.pyqSource,
+    pyqYear: eq.question.pyqYear,
+    tags: eq.question.tags,
     // Response state
     selectedOption: eq.response?.selectedOption || null,
     status: eq.response?.status || "NOT_VISITED",

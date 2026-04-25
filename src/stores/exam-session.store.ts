@@ -18,6 +18,10 @@ export interface QuestionState {
   optionC: string;
   optionD: string;
   difficulty: string;
+  source: string | null;
+  pyqSource: string | null;
+  pyqYear: number | null;
+  tags: string[] | null;
   selectedOption: string | null;
   status: QuestionNavStatus;
   timeSpentSec: number;
@@ -72,6 +76,10 @@ interface ExamSessionState {
       optionC: string;
       optionD: string;
       difficulty: string;
+      source?: string | null;
+      pyqSource?: string | null;
+      pyqYear?: number | null;
+      tags?: string[] | null;
       selectedOption: string | null;
       status: string;
       timeSpentSec: number;
@@ -135,6 +143,10 @@ export const useExamSessionStore = create<ExamSessionState>()(
           optionC: q.optionC,
           optionD: q.optionD,
           difficulty: q.difficulty,
+          source: q.source || null,
+          pyqSource: q.pyqSource || null,
+          pyqYear: q.pyqYear || null,
+          tags: q.tags || null,
           selectedOption: q.selectedOption,
           status: (q.status as QuestionNavStatus) || "NOT_VISITED",
           timeSpentSec: q.timeSpentSec || 0,
