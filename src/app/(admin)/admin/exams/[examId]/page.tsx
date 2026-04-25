@@ -258,14 +258,19 @@ export default async function ExamDetailPage({
                           Q{i + 1}
                         </span>
                         <div className="flex items-center gap-2">
-                          {q.source === "PYQ" && (
+                          {q.source === "PYQ" && q.tags?.includes("direct") && (
                             <Badge className="bg-purple-100 text-purple-800 text-xs">
-                              PYQ {q.pyqSource ? `— ${q.pyqSource}` : ""} {q.pyqYear || ""}
+                              PYQ {q.pyqSource || ""} {q.pyqYear || ""}
+                            </Badge>
+                          )}
+                          {q.source === "PYQ" && q.tags?.includes("variant") && (
+                            <Badge className="bg-indigo-100 text-indigo-800 text-xs">
+                              PYQ Variant {q.pyqSource || ""}
                             </Badge>
                           )}
                           {q.source === "AI_GENERATED" && (
                             <Badge variant="outline" className="text-xs text-blue-700">
-                              AI Generated
+                              AI Exam Level
                             </Badge>
                           )}
                           <Badge variant="outline" className="text-xs">

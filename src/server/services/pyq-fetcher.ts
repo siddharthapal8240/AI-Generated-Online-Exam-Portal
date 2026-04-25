@@ -2,20 +2,22 @@ import { z } from "zod";
 import { generateWithFallback } from "./ai-gateway";
 import { db } from "@/server/db";
 import { questions } from "@/server/schema";
-import { eq, and, ilike } from "drizzle-orm";
+import { eq, and, ilike, or } from "drizzle-orm";
 
-// Target exams for PYQ fetching (10 years: 2015-2025)
+// ─── Target Exams ────────────────────────────────────────────────────────────
+
 const TARGET_EXAMS = [
-  "SSC CGL",
+  "SSC CGL Tier-I",
+  "SSC CGL Tier-II",
   "SSC CHSL",
   "IBPS SO IT Officer",
-  "IBPS PO",
+  "IBPS PO Prelims",
+  "IBPS PO Mains",
 ];
 
-const PYQ_YEARS = Array.from({ length: 11 }, (_, i) => 2015 + i); // 2015-2025
+// ─── Schemas ─────────────────────────────────────────────────────────────────
 
-// Schema for extracted PYQs
-const extractedPyqSchema = z.object({
+const pyqSearchSchema = z.object({
   questions: z.array(
     z.object({
       questionText: z.string(),
@@ -25,83 +27,119 @@ const extractedPyqSchema = z.object({
       optionD: z.string(),
       correctOption: z.enum(["A", "B", "C", "D"]),
       explanation: z.string(),
-      examName: z
+      sourceExam: z
         .string()
-        .describe("Exact exam name, e.g., 'SSC CGL 2023 Tier-I'"),
-      year: z.number().describe("Year of the exam"),
-      isPyq: z
-        .boolean()
+        .describe("Exact exam name e.g. 'SSC CGL 2023 Tier-I'"),
+      year: z.number(),
+      questionType: z
+        .enum(["DIRECT_PYQ", "PYQ_VARIANT", "AI_EXAM_LEVEL"])
         .describe(
-          "true if this is a real PYQ or close variant, false if AI-generated to fill gaps",
+          "DIRECT_PYQ = real question from actual paper, PYQ_VARIANT = tweaked version of a real PYQ with different numbers, AI_EXAM_LEVEL = fresh AI question at same exam level",
         ),
     }),
   ),
 });
 
-export type ExtractedPyq = z.infer<typeof extractedPyqSchema>["questions"][0];
+export type FetchedQuestion = z.infer<
+  typeof pyqSearchSchema
+>["questions"][0];
+
+// ─── PYQ Fetching ────────────────────────────────────────────────────────────
 
 /**
- * Search the web for PYQs and extract them using AI.
- * Returns real PYQs + variants formatted as MCQs.
+ * Fetch PYQs for a topic. Called on EVERY generation — always searches fresh.
+ *
+ * Returns a structured mix:
+ *   - DIRECT_PYQ: Real questions from actual exam papers
+ *   - PYQ_VARIANT: Tweaked versions with different numbers/names
+ *   - AI_EXAM_LEVEL: Fresh AI questions at the same difficulty level
  */
-export async function fetchPyqsForTopic({
+export async function fetchAndGenerateQuestions({
   topicName,
   subjectSlug,
   difficulty,
-  count,
+  totalCount,
+  pyqDirectPercent = 20,
+  pyqVariantPercent = 20,
 }: {
   topicName: string;
   subjectSlug: string;
   difficulty: "EASY" | "MEDIUM" | "HARD";
-  count: number;
-}): Promise<{ questions: ExtractedPyq[]; model: string; provider: string }> {
-  // Build search context — tell the AI which exams to focus on
+  totalCount: number;
+  pyqDirectPercent?: number;
+  pyqVariantPercent?: number;
+}): Promise<{
+  questions: FetchedQuestion[];
+  model: string;
+  provider: string;
+}> {
+  const directPyqCount = Math.max(1, Math.round((totalCount * pyqDirectPercent) / 100));
+  const variantCount = Math.max(1, Math.round((totalCount * pyqVariantPercent) / 100));
+  const aiCount = totalCount - directPyqCount - variantCount;
+
   const examList = TARGET_EXAMS.join(", ");
-  const yearRange = `${PYQ_YEARS[0]}-${PYQ_YEARS[PYQ_YEARS.length - 1]}`;
 
-  const systemPrompt = `You are a senior question paper researcher and setter for Indian government competitive exams. You have deep knowledge of Previous Year Questions (PYQs) from ${examList} exams from ${yearRange}.
+  const systemPrompt = `You are a question paper researcher with access to a comprehensive database of Previous Year Questions (PYQs) from Indian government competitive exams. You have detailed knowledge of every question asked in ${examList} papers from 2015 to 2025.
 
-Your job is to provide REAL PYQs and their close variants for the given topic. You must:
+YOUR CRITICAL RESPONSIBILITIES:
 
-1. **Recall actual PYQs** — Questions that were actually asked in SSC CGL, SSC CHSL, IBPS SO IT Officer, IBPS PO papers from 2015-2025. You have been trained on these papers and know the exact questions.
+1. **DIRECT PYQs (${directPyqCount} questions)**:
+   - These MUST be actual questions from real exam papers
+   - You must cite the exact exam and year: "SSC CGL 2022 Tier-I", "IBPS PO 2023 Prelims"
+   - The question text, options, and answer must match what was actually asked
+   - Search through papers from: ${examList}
+   - Years to search: 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025
+   - If you recall a question but aren't 100% sure of the exact year, mark it as the closest year you believe
+   - Set questionType = "DIRECT_PYQ"
 
-2. **Create close variants** — For each real PYQ you recall, also create a variant with different numbers but same concept and pattern. Mark variants clearly.
+2. **PYQ VARIANTS (${variantCount} questions)**:
+   - Take a real PYQ and modify it: change the numbers, names, or context
+   - Keep the same concept, formula, and difficulty level
+   - Example: If PYQ asks "A person walks 10km at 5km/h...", variant could be "A cyclist rides 20km at 10km/h..."
+   - Cite which PYQ it's based on: "Variant of SSC CGL 2021 Tier-I"
+   - Set questionType = "PYQ_VARIANT"
 
-3. **Mark each question accurately**:
-   - If it's a real PYQ or very close to one: set isPyq=true, examName="SSC CGL 2023 Tier-I" (be specific with year and tier)
-   - If it's an AI-generated variant or fill: set isPyq=false, examName="Inspired by SSC CGL pattern"
+3. **AI EXAM-LEVEL (${aiCount} questions)**:
+   - Fresh questions that match the exact style and difficulty of ${examList}
+   - Must feel indistinguishable from a real PYQ
+   - Use the same question patterns, number ranges, and formats seen in real papers
+   - Set questionType = "AI_EXAM_LEVEL"
+   - Set sourceExam to the exam it most closely matches, e.g., "SSC CGL style"
 
-4. **Source exams to focus on** (in priority order):
-   - SSC CGL (Tier-I and Tier-II) — 2015 to 2025
-   - SSC CHSL — 2015 to 2025
-   - IBPS SO IT Officer — 2015 to 2025
-   - IBPS PO (Prelims and Mains) — 2015 to 2025
-
-5. **Question style**: Match the EXACT style of the source exam. SSC CGL Quant questions have a specific pattern that's different from IBPS PO. Maintain that distinction.
-
-6. **Indian context**: Use Rs., Indian names, Indian scenarios as they appear in actual papers.`;
+QUALITY RULES:
+- Every question MUST have exactly 4 plausible options
+- Include trap options (common calculation mistakes)
+- Solutions must be step-by-step with formulas
+- All arithmetic MUST be verified and correct
+- Use Indian context: Rs., Indian names, Indian scenarios
+- Questions must be self-contained
+- NO duplicate concepts across the ${totalCount} questions`;
 
   const prompt = `Topic: **${topicName}**
 Subject: ${subjectSlug.replace(/-/g, " ")}
 Difficulty: ${difficulty}
-Number of questions needed: ${count}
 
-INSTRUCTIONS:
-- Provide ${Math.ceil(count * 0.5)} questions that are REAL PYQs (or as close to real as you can recall) from SSC CGL, SSC CHSL, IBPS SO IT, IBPS PO papers (2015-2025)
-- Provide ${Math.floor(count * 0.5)} questions that are close VARIANTS of real PYQs (same concept, different numbers)
-- For each real PYQ, specify the exact exam and year (e.g., "SSC CGL 2022 Tier-I", "IBPS PO 2023 Prelims")
-- If you cannot recall enough real PYQs for this topic, fill with AI-generated questions in the same exam style, but mark isPyq=false
-- Each question must have 4 options, one correct answer, and a step-by-step explanation
-- Ensure calculations are 100% correct
-- Include trap options (options that result from common mistakes)
+SEARCH AND GENERATE:
+1. Search through all ${examList} papers from 2015-2025 for "${topicName}" questions
+2. Pick the ${directPyqCount} best REAL PYQs you can find for this topic (questionType: "DIRECT_PYQ")
+3. Create ${variantCount} VARIANTS of real PYQs — same concept, different numbers (questionType: "PYQ_VARIANT")
+4. Generate ${aiCount} fresh AI questions at the same exam level (questionType: "AI_EXAM_LEVEL")
 
-Generate exactly ${count} questions.`;
+Total: exactly ${totalCount} questions
+
+For DIRECT_PYQs, search these specific sources:
+- SSC CGL papers: 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024
+- SSC CHSL papers: 2015-2024
+- IBPS PO papers: 2015-2024
+- IBPS SO IT Officer papers: 2017-2024
+
+Generate exactly ${totalCount} questions now.`;
 
   const result = await generateWithFallback({
     task: "question_generation",
     system: systemPrompt,
     prompt,
-    schema: extractedPyqSchema,
+    schema: pyqSearchSchema,
   });
 
   return {
@@ -111,86 +149,120 @@ Generate exactly ${count} questions.`;
   };
 }
 
+// ─── Deduplication ───────────────────────────────────────────────────────────
+
 /**
- * Check how many PYQs we already have stored in DB for a given topic.
+ * Check if a question already exists in the DB.
+ * Uses first 60 chars of question text for fuzzy matching.
  */
-export async function getStoredPyqCount(topicId: string): Promise<number> {
-  const stored = await db.query.questions.findMany({
+export async function isDuplicate(
+  questionText: string,
+  topicId: string,
+): Promise<boolean> {
+  // Normalize: take first 60 chars, remove extra spaces
+  const searchText = questionText.trim().slice(0, 60).replace(/\s+/g, " ");
+
+  const existing = await db.query.questions.findFirst({
     where: and(
       eq(questions.topicId, topicId),
-      eq(questions.source, "PYQ"),
-      eq(questions.isActive, true),
+      ilike(questions.questionText, `%${searchText}%`),
     ),
     columns: { id: true },
   });
-  return stored.length;
+
+  return !!existing;
 }
 
-/**
- * Get stored PYQs for a topic, optionally filtered by difficulty.
- */
-export async function getStoredPyqs(
-  topicId: string,
-  opts?: { difficulty?: string; limit?: number },
-) {
-  return db.query.questions.findMany({
-    where: and(
-      eq(questions.topicId, topicId),
-      eq(questions.source, "PYQ"),
-      eq(questions.isActive, true),
-      opts?.difficulty ? eq(questions.difficulty, opts.difficulty as any) : undefined,
-    ),
-    limit: opts?.limit,
-  });
-}
+// ─── Store PYQs ──────────────────────────────────────────────────────────────
 
 /**
- * Store fetched PYQs in the database.
- * Skips duplicates based on question text similarity.
+ * Store fetched PYQs in the permanent question bank.
+ * These are stored WITHOUT an examTag so they're reusable across exams.
+ * Returns IDs of stored questions.
  */
-export async function storePyqs(
-  pyqs: ExtractedPyq[],
+export async function storePyqsInBank(
+  fetchedQuestions: FetchedQuestion[],
   topicId: string,
   difficulty: string,
   aiModel: string,
-  examTag?: string,
-): Promise<{ stored: number; skipped: number }> {
-  let stored = 0;
+): Promise<{ stored: string[]; skipped: number }> {
+  const storedIds: string[] = [];
   let skipped = 0;
 
-  for (const pyq of pyqs) {
-    // Simple dedup: check if a question with very similar text already exists
-    const existing = await db.query.questions.findFirst({
-      where: and(
-        eq(questions.topicId, topicId),
-        ilike(questions.questionText, `%${pyq.questionText.slice(0, 50)}%`),
-      ),
-    });
-
-    if (existing) {
+  for (const q of fetchedQuestions) {
+    // Skip if already in DB
+    const duplicate = await isDuplicate(q.questionText, topicId);
+    if (duplicate) {
       skipped++;
       continue;
     }
 
-    await db.insert(questions).values({
-      topicId,
-      source: pyq.isPyq ? "PYQ" : "AI_GENERATED",
-      questionText: pyq.questionText,
-      optionA: pyq.optionA,
-      optionB: pyq.optionB,
-      optionC: pyq.optionC,
-      optionD: pyq.optionD,
-      correctOption: pyq.correctOption,
-      explanation: pyq.explanation,
-      difficulty: difficulty as any,
-      pyqSource: pyq.examName,
-      pyqYear: pyq.year,
-      aiModel,
-      generatedForExamId: examTag,
-      tags: pyq.isPyq ? ["pyq", "verified"] : ["variant"],
-    });
-    stored++;
+    const source =
+      q.questionType === "DIRECT_PYQ"
+        ? "PYQ"
+        : q.questionType === "PYQ_VARIANT"
+          ? "PYQ"
+          : "AI_GENERATED";
+
+    const tags: string[] = [];
+    if (q.questionType === "DIRECT_PYQ") tags.push("pyq", "direct");
+    if (q.questionType === "PYQ_VARIANT") tags.push("pyq", "variant");
+    if (q.questionType === "AI_EXAM_LEVEL") tags.push("ai", "exam-level");
+
+    try {
+      const [inserted] = await db
+        .insert(questions)
+        .values({
+          topicId,
+          source: source as any,
+          questionText: q.questionText,
+          optionA: q.optionA,
+          optionB: q.optionB,
+          optionC: q.optionC,
+          optionD: q.optionD,
+          correctOption: q.correctOption,
+          explanation: q.explanation,
+          difficulty: difficulty as any,
+          pyqSource: q.sourceExam,
+          pyqYear: q.year,
+          aiModel,
+          tags,
+          // No generatedForExamId — stored in permanent bank
+        })
+        .returning();
+
+      storedIds.push(inserted.id);
+    } catch (err) {
+      // Skip on DB error (likely duplicate constraint)
+      skipped++;
+    }
   }
 
-  return { stored, skipped };
+  return { stored: storedIds, skipped };
+}
+
+/**
+ * Get PYQs from the permanent bank for a topic.
+ */
+export async function getPyqsFromBank(
+  topicId: string,
+  opts?: { difficulty?: string; limit?: number; excludeIds?: string[] },
+) {
+  const results = await db.query.questions.findMany({
+    where: and(
+      eq(questions.topicId, topicId),
+      eq(questions.source, "PYQ"),
+      eq(questions.isActive, true),
+      opts?.difficulty
+        ? eq(questions.difficulty, opts.difficulty as any)
+        : undefined,
+    ),
+    limit: opts?.limit || 100,
+  });
+
+  // Exclude already-used question IDs
+  if (opts?.excludeIds?.length) {
+    return results.filter((q) => !opts.excludeIds!.includes(q.id));
+  }
+  return results;
 }

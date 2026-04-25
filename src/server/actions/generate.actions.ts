@@ -10,7 +10,8 @@ export type GenerateActionResult = {
   data?: {
     totalGenerated: number;
     totalFailed: number;
-    pyqCount: number;
+    pyqDirectCount: number;
+    pyqVariantCount: number;
     aiCount: number;
     errors: string[];
   };
@@ -39,7 +40,8 @@ export async function generateQuestionsAction(
       data: {
         totalGenerated: result.totalGenerated,
         totalFailed: result.totalFailed,
-        pyqCount: result.pyqCount,
+        pyqDirectCount: result.pyqDirectCount,
+        pyqVariantCount: result.pyqVariantCount,
         aiCount: result.aiCount,
         errors: result.errors,
       },

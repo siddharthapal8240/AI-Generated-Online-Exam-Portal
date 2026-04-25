@@ -1,25 +1,25 @@
 import { db } from "@/server/db";
 import { questions, examTopicConfigs, topics } from "@/server/schema";
 import { eq, and } from "drizzle-orm";
-import { generateQuestions, validateQuestion } from "./question-generator";
+import { validateQuestion } from "./question-generator";
 import {
-  fetchPyqsForTopic,
-  getStoredPyqs,
-  getStoredPyqCount,
-  storePyqs,
+  fetchAndGenerateQuestions,
+  storePyqsInBank,
+  getPyqsFromBank,
+  isDuplicate,
 } from "./pyq-fetcher";
 
 export interface GenerationResult {
   examId: string;
   totalGenerated: number;
   totalFailed: number;
-  pyqCount: number;
+  pyqDirectCount: number;
+  pyqVariantCount: number;
   aiCount: number;
   questionIds: string[];
   errors: string[];
 }
 
-// Fisher-Yates shuffle
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -31,11 +31,12 @@ function shuffle<T>(arr: T[]): T[] {
 
 /**
  * Generate questions for a single topic.
- * Strategy:
- *   1. Check DB for existing PYQs for this topic
- *   2. If not enough PYQs, fetch from web via AI and store them
- *   3. Pick pyqPercentage% from PYQs, rest from AI-generated
- *   4. If PYQs not available at all, fill entirely with AI
+ *
+ * Strategy (EVERY time, always fresh):
+ *   1. Call AI to fetch real PYQs from web + create variants + generate AI questions
+ *   2. Store ALL fetched PYQs in the permanent question bank (deduped)
+ *   3. For this exam: pick 20% direct PYQ + 20% PYQ variants + 60% AI exam-level
+ *   4. Each question tagged with examTag so it's linked to this specific exam/user
  */
 async function generateForTopic(
   examTag: string,
@@ -44,7 +45,8 @@ async function generateForTopic(
 ): Promise<{
   generated: number;
   failed: number;
-  pyqCount: number;
+  pyqDirectCount: number;
+  pyqVariantCount: number;
   aiCount: number;
   questionIds: string[];
   errors: string[];
@@ -52,7 +54,8 @@ async function generateForTopic(
   const result = {
     generated: 0,
     failed: 0,
-    pyqCount: 0,
+    pyqDirectCount: 0,
+    pyqVariantCount: 0,
     aiCount: 0,
     questionIds: [] as string[],
     errors: [] as string[],
@@ -68,174 +71,118 @@ async function generateForTopic(
   }
 
   const totalNeeded = config.questionCount;
-  const pyqPercentage = config.pyqPercentage ?? 25; // Default 25% PYQs
-  const pyqTarget = Math.round((totalNeeded * pyqPercentage) / 100);
-  const aiTarget = totalNeeded - pyqTarget;
+  const pyqPercentage = config.pyqPercentage ?? 40; // 40% total PYQ (20% direct + 20% variant)
+  const pyqDirectPercent = Math.round(pyqPercentage / 2); // 20% direct PYQ
+  const pyqVariantPercent = pyqPercentage - pyqDirectPercent; // 20% variant
 
   console.log(
-    `[Topic: ${topic.name}] Need ${totalNeeded} questions (${pyqTarget} PYQ + ${aiTarget} AI)`,
+    `[${topic.name}] Fetching & generating ${totalNeeded} questions (${pyqDirectPercent}% direct PYQ + ${pyqVariantPercent}% variant + ${100 - pyqPercentage}% AI)`,
   );
 
-  // ─── Step 1: Get PYQs (from DB or fetch new ones) ──────────────────────
+  try {
+    // ─── Step 1: Fetch fresh PYQs + variants + AI questions from AI ─────
 
-  let pyqsToUse: any[] = [];
+    const fetched = await fetchAndGenerateQuestions({
+      topicName: topic.name,
+      subjectSlug,
+      difficulty: config.difficulty,
+      totalCount: totalNeeded,
+      pyqDirectPercent,
+      pyqVariantPercent,
+    });
 
-  if (pyqTarget > 0) {
-    // Check how many PYQs we already have stored for this topic
-    const storedCount = await getStoredPyqCount(topic.id);
-    console.log(`[Topic: ${topic.name}] ${storedCount} PYQs already in DB`);
+    console.log(
+      `[${topic.name}] AI returned ${fetched.questions.length} questions`,
+    );
 
-    if (storedCount < pyqTarget) {
-      // Not enough PYQs in DB — fetch more via AI web search
-      console.log(
-        `[Topic: ${topic.name}] Fetching ${pyqTarget * 2} PYQs from web...`,
-      );
-      try {
-        const fetched = await fetchPyqsForTopic({
-          topicName: topic.name,
-          subjectSlug,
-          difficulty: config.difficulty,
-          count: pyqTarget * 2, // Fetch extra so we have variety for future exams
-        });
+    // ─── Step 2: Store ALL in permanent bank (deduped) ──────────────────
 
-        // Store fetched PYQs in DB for future use
-        const storeResult = await storePyqs(
-          fetched.questions,
-          topic.id,
-          config.difficulty,
-          fetched.model,
-        );
-        console.log(
-          `[Topic: ${topic.name}] Stored ${storeResult.stored} new PYQs, skipped ${storeResult.skipped} duplicates`,
-        );
-      } catch (fetchError) {
-        console.error(
-          `[Topic: ${topic.name}] PYQ fetch failed:`,
-          fetchError instanceof Error ? fetchError.message : fetchError,
-        );
+    const bankResult = await storePyqsInBank(
+      fetched.questions,
+      topic.id,
+      config.difficulty,
+      fetched.model,
+    );
+
+    console.log(
+      `[${topic.name}] Stored ${bankResult.stored.length} in bank, skipped ${bankResult.skipped} duplicates`,
+    );
+
+    // ─── Step 3: Create exam-specific copies linked to this exam/user ───
+
+    for (const q of fetched.questions) {
+      const validation = validateQuestion({
+        questionText: q.questionText,
+        optionA: q.optionA,
+        optionB: q.optionB,
+        optionC: q.optionC,
+        optionD: q.optionD,
+        correctOption: q.correctOption,
+        explanation: q.explanation,
+      });
+
+      if (!validation.valid) {
+        result.failed++;
         result.errors.push(
-          `PYQ fetch failed for ${topic.name}, using AI-generated instead`,
+          `Invalid question for ${topic.name}: ${validation.issues.join(", ")}`,
+        );
+        continue;
+      }
+
+      const source =
+        q.questionType === "DIRECT_PYQ" || q.questionType === "PYQ_VARIANT"
+          ? "PYQ"
+          : "AI_GENERATED";
+
+      const tags: string[] = [];
+      if (q.questionType === "DIRECT_PYQ") tags.push("pyq", "direct");
+      if (q.questionType === "PYQ_VARIANT") tags.push("pyq", "variant");
+      if (q.questionType === "AI_EXAM_LEVEL") tags.push("ai", "exam-level");
+
+      try {
+        const [inserted] = await db
+          .insert(questions)
+          .values({
+            topicId: topic.id,
+            source: source as any,
+            questionText: q.questionText,
+            optionA: q.optionA,
+            optionB: q.optionB,
+            optionC: q.optionC,
+            optionD: q.optionD,
+            correctOption: q.correctOption,
+            explanation: q.explanation,
+            difficulty: config.difficulty,
+            pyqSource: q.sourceExam,
+            pyqYear: q.year,
+            aiModel: fetched.model,
+            generatedForExamId: examTag,
+            tags,
+          })
+          .returning();
+
+        result.questionIds.push(inserted.id);
+        result.generated++;
+
+        if (q.questionType === "DIRECT_PYQ") result.pyqDirectCount++;
+        else if (q.questionType === "PYQ_VARIANT") result.pyqVariantCount++;
+        else result.aiCount++;
+      } catch (dbError) {
+        result.failed++;
+        result.errors.push(
+          `DB error for ${topic.name}: ${dbError instanceof Error ? dbError.message : "unknown"}`,
         );
       }
     }
-
-    // Now pick PYQs from DB (freshly stored + previously existing)
-    const storedPyqs = await getStoredPyqs(topic.id, {
-      difficulty: config.difficulty,
-      limit: pyqTarget * 3, // Get more than needed for random selection
-    });
-
-    // Randomly pick the required number
-    pyqsToUse = shuffle(storedPyqs).slice(0, pyqTarget);
-    console.log(
-      `[Topic: ${topic.name}] Using ${pyqsToUse.length} PYQs from DB`,
+  } catch (genError) {
+    result.failed += totalNeeded;
+    result.errors.push(
+      `Generation failed for ${topic.name}: ${genError instanceof Error ? genError.message : "unknown"}`,
     );
-  }
-
-  // ─── Step 2: Assign PYQs to this exam ──────────────────────────────────
-
-  for (const pyq of pyqsToUse) {
-    try {
-      // Create a copy linked to this exam
-      const [inserted] = await db
-        .insert(questions)
-        .values({
-          topicId: topic.id,
-          source: "PYQ",
-          questionText: pyq.questionText,
-          optionA: pyq.optionA,
-          optionB: pyq.optionB,
-          optionC: pyq.optionC,
-          optionD: pyq.optionD,
-          correctOption: pyq.correctOption,
-          explanation: pyq.explanation,
-          difficulty: config.difficulty,
-          pyqSource: pyq.pyqSource,
-          pyqYear: pyq.pyqYear,
-          aiModel: pyq.aiModel,
-          generatedForExamId: examTag,
-          tags: ["pyq"],
-        })
-        .returning();
-
-      result.questionIds.push(inserted.id);
-      result.generated++;
-      result.pyqCount++;
-    } catch (dbError) {
-      result.failed++;
-      result.errors.push(
-        `DB error storing PYQ for ${topic.name}: ${dbError instanceof Error ? dbError.message : "unknown"}`,
-      );
-    }
-  }
-
-  // ─── Step 3: Generate remaining with AI ────────────────────────────────
-
-  const aiNeeded = totalNeeded - result.generated;
-  if (aiNeeded > 0) {
-    console.log(
-      `[Topic: ${topic.name}] Generating ${aiNeeded} AI questions...`,
-    );
-    try {
-      const generated = await generateQuestions({
-        subjectSlug,
-        topicName: topic.name,
-        difficulty: config.difficulty,
-        count: aiNeeded,
-      });
-
-      const insertPromises = generated.questions.map(async (q) => {
-        const validation = validateQuestion(q);
-        if (!validation.valid) {
-          result.failed++;
-          result.errors.push(
-            `Invalid AI question for ${topic.name}: ${validation.issues.join(", ")}`,
-          );
-          return;
-        }
-
-        try {
-          const [inserted] = await db
-            .insert(questions)
-            .values({
-              topicId: topic.id,
-              source: "AI_GENERATED",
-              questionText: q.questionText,
-              optionA: q.optionA,
-              optionB: q.optionB,
-              optionC: q.optionC,
-              optionD: q.optionD,
-              correctOption: q.correctOption,
-              explanation: q.explanation,
-              difficulty: config.difficulty,
-              aiModel: generated.model,
-              generatedForExamId: examTag,
-              tags: [],
-            })
-            .returning();
-
-          result.questionIds.push(inserted.id);
-          result.generated++;
-          result.aiCount++;
-        } catch (dbError) {
-          result.failed++;
-          result.errors.push(
-            `DB error for ${topic.name}: ${dbError instanceof Error ? dbError.message : "unknown"}`,
-          );
-        }
-      });
-
-      await Promise.all(insertPromises);
-    } catch (genError) {
-      result.failed += aiNeeded;
-      result.errors.push(
-        `AI generation failed for ${topic.name}: ${genError instanceof Error ? genError.message : "unknown"}`,
-      );
-    }
   }
 
   console.log(
-    `[Topic: ${topic.name}] Done: ${result.pyqCount} PYQs + ${result.aiCount} AI = ${result.generated} total`,
+    `[${topic.name}] Done: ${result.pyqDirectCount} direct PYQ + ${result.pyqVariantCount} variants + ${result.aiCount} AI = ${result.generated} total`,
   );
 
   return result;
@@ -258,11 +205,12 @@ export async function generateQuestionsForExam(
       examId,
       totalGenerated: 0,
       totalFailed: 0,
-      pyqCount: 0,
+      pyqDirectCount: 0,
+      pyqVariantCount: 0,
       aiCount: 0,
       questionIds: [],
       errors: [
-        "No topics configured for this exam. Select subjects/topics in the exam creation wizard.",
+        "No topics configured. Select subjects/topics in exam creation wizard.",
       ],
     };
   }
@@ -273,7 +221,7 @@ export async function generateQuestionsForExam(
   }));
 
   console.log(
-    `[Exam] Generating for ${adjustedConfigs.length} topics in parallel (${multiplier}x multiplier)...`,
+    `[Exam] Generating for ${adjustedConfigs.length} topics in parallel (${multiplier}x)...`,
   );
   const startTime = Date.now();
 
@@ -289,7 +237,8 @@ export async function generateQuestionsForExam(
     examId,
     totalGenerated: 0,
     totalFailed: 0,
-    pyqCount: 0,
+    pyqDirectCount: 0,
+    pyqVariantCount: 0,
     aiCount: 0,
     questionIds: [],
     errors: [],
@@ -298,14 +247,15 @@ export async function generateQuestionsForExam(
   for (const tr of topicResults) {
     result.totalGenerated += tr.generated;
     result.totalFailed += tr.failed;
-    result.pyqCount += tr.pyqCount;
+    result.pyqDirectCount += tr.pyqDirectCount;
+    result.pyqVariantCount += tr.pyqVariantCount;
     result.aiCount += tr.aiCount;
     result.questionIds.push(...tr.questionIds);
     result.errors.push(...tr.errors);
   }
 
   console.log(
-    `[Exam] Done in ${elapsed}s: ${result.pyqCount} PYQs + ${result.aiCount} AI = ${result.totalGenerated} total`,
+    `[Exam] Done in ${elapsed}s: ${result.pyqDirectCount} direct PYQ + ${result.pyqVariantCount} variants + ${result.aiCount} AI = ${result.totalGenerated} total`,
   );
 
   return result;
