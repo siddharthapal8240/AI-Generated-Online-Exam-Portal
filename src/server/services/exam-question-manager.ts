@@ -163,6 +163,65 @@ async function generateForTopic(
     );
   }
 
+  // ─── Retry: fill missing questions if we got fewer than needed ────────
+  const missing = totalNeeded - result.generated;
+  if (missing > 0 && result.generated > 0) {
+    console.log(
+      `[${topic.name}] ${missing} questions short — retrying for missing ones...`,
+    );
+
+    try {
+      const { generateQuestions } = await import("./question-generator");
+      const retry = await generateQuestions({
+        subjectSlug,
+        topicName: topic.name,
+        difficulty: config.difficulty,
+        count: missing,
+      });
+
+      for (const q of retry.questions) {
+        const validation = validateQuestion(q);
+        if (!validation.valid) continue;
+
+        try {
+          const [inserted] = await db
+            .insert(questions)
+            .values({
+              topicId: topic.id,
+              source: "AI_GENERATED" as any,
+              questionText: q.questionText,
+              optionA: q.optionA,
+              optionB: q.optionB,
+              optionC: q.optionC,
+              optionD: q.optionD,
+              correctOption: q.correctOption,
+              explanation: q.explanation,
+              difficulty: config.difficulty,
+              aiModel: retry.model,
+              generatedForExamId: examTag,
+              tags: ["ai", "exam-level", "retry"],
+            })
+            .returning();
+
+          result.questionIds.push(inserted.id);
+          result.generated++;
+          result.aiCount++;
+        } catch {
+          // Skip on error
+        }
+      }
+
+      console.log(
+        `[${topic.name}] After retry: ${result.generated}/${totalNeeded} questions`,
+      );
+    } catch (retryError) {
+      console.error(
+        `[${topic.name}] Retry failed:`,
+        retryError instanceof Error ? retryError.message : retryError,
+      );
+    }
+  }
+
   console.log(
     `[${topic.name}] Done: ${result.pyqDirectCount} direct PYQ + ${result.pyqVariantCount} variants + ${result.aiCount} AI = ${result.generated} total`,
   );
