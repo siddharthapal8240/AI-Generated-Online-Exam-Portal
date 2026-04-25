@@ -143,9 +143,33 @@ export function ExamTable({
         <span>
           {totalCount} exam{totalCount !== 1 ? "s" : ""} total
         </span>
-        <span>
-          Page {page} of {totalPages}
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              const params = new URLSearchParams(window.location.search);
+              params.set("page", String(Math.max(1, page - 1)));
+              window.location.search = params.toString();
+            }}
+            disabled={page <= 1}
+            className="rounded-md border px-3 py-1 text-xs font-medium transition-colors hover:bg-muted disabled:opacity-40 disabled:pointer-events-none"
+          >
+            Previous
+          </button>
+          <span>
+            Page {page} of {totalPages}
+          </span>
+          <button
+            onClick={() => {
+              const params = new URLSearchParams(window.location.search);
+              params.set("page", String(Math.min(totalPages, page + 1)));
+              window.location.search = params.toString();
+            }}
+            disabled={page >= totalPages}
+            className="rounded-md border px-3 py-1 text-xs font-medium transition-colors hover:bg-muted disabled:opacity-40 disabled:pointer-events-none"
+          >
+            Next
+          </button>
+        </div>
       </div>
     </div>
   );
