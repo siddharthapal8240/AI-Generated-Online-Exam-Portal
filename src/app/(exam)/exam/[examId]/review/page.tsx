@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { currentUser } from "@clerk/nextjs/server";
 import { db } from "@/server/db";
-import { examSessions, examQuestions } from "@/server/schema";
-import { eq } from "drizzle-orm";
+import { examSessions, users } from "@/server/schema";
+import { eq, and } from "drizzle-orm";
 import { getExamById } from "@/server/data-access/exams";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,12 +20,25 @@ export default async function ExamReviewPage({
   const exam = await getExamById(examId);
   if (!exam) notFound();
 
-  // Get the first session for this exam (dev mode)
+  // Get current user
+  const clerkUser = await currentUser();
+  if (!clerkUser) notFound();
+
+  const dbUser = await db.query.users.findFirst({
+    where: eq(users.clerkId, clerkUser.id),
+    columns: { id: true },
+  });
+  if (!dbUser) notFound();
+
+  // Get ONLY this user's session
   const session = await db.query.examSessions.findFirst({
-    where: eq(examSessions.examId, examId),
+    where: and(
+      eq(examSessions.examId, examId),
+      eq(examSessions.userId, dbUser.id),
+    ),
     with: {
       examQuestions: {
-        orderBy: (eq, { asc }) => [asc(eq.sequenceNumber)],
+        orderBy: (eqCol, { asc }) => [asc(eqCol.sequenceNumber)],
         with: {
           question: true,
           response: true,
@@ -35,9 +49,11 @@ export default async function ExamReviewPage({
 
   if (!session) {
     return (
-      <div className="mx-auto max-w-3xl p-4 sm:p-6 text-center py-12">
-        <p className="text-muted-foreground">No session found for this exam.</p>
-        <Button className="mt-4" render={<Link href="/dashboard" />}>Back to Dashboard</Button>
+      <div className="mx-auto max-w-3xl p-4 text-center py-12 sm:p-6">
+        <p className="text-muted-foreground">No exam session found.</p>
+        <Button className="mt-4" render={<Link href="/dashboard" />}>
+          Back to Dashboard
+        </Button>
       </div>
     );
   }
@@ -50,7 +66,9 @@ export default async function ExamReviewPage({
         </Button>
         <div>
           <h1 className="text-2xl font-bold">{exam.title}</h1>
-          <Badge variant="outline" className="bg-amber-100 text-amber-800">Review Mode</Badge>
+          <Badge variant="outline" className="bg-amber-100 text-amber-800">
+            Review Mode
+          </Badge>
         </div>
       </div>
 
@@ -77,10 +95,17 @@ export default async function ExamReviewPage({
                     <span className="text-sm font-semibold text-muted-foreground">
                       Q{eq.sequenceNumber}
                     </span>
-                    <Badge variant="outline" className="text-xs">{q.difficulty}</Badge>
+                    <Badge variant="outline" className="text-xs">
+                      {q.difficulty}
+                    </Badge>
                     {r?.totalTimeSec !== undefined && r.totalTimeSec > 0 && (
                       <span className="text-xs text-muted-foreground">
                         {Math.round(r.totalTimeSec)}s
+                      </span>
+                    )}
+                    {q.source === "PYQ" && q.pyqSource && (
+                      <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-800">
+                        PYQ {q.pyqSource}
                       </span>
                     )}
                   </div>
@@ -136,11 +161,12 @@ export default async function ExamReviewPage({
                   })}
                 </div>
 
-                {/* Explanation */}
                 {q.explanation && (
                   <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
                     <p className="mb-1 text-xs font-semibold text-amber-800">Solution:</p>
-                    <p className="text-sm text-amber-900 whitespace-pre-wrap">{q.explanation}</p>
+                    <p className="whitespace-pre-wrap text-sm text-amber-900">
+                      {q.explanation}
+                    </p>
                   </div>
                 )}
               </CardContent>
