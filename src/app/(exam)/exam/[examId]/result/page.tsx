@@ -8,13 +8,8 @@ import { getExamById } from "@/server/data-access/exams";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  ArrowLeft,
-  CheckCircle2,
-  XCircle,
-  MinusCircle,
-  Download,
-} from "lucide-react";
+import { ArrowLeft, CheckCircle2, XCircle, MinusCircle } from "lucide-react";
+import { DownloadPaperButton } from "./_components/download-paper-button";
 
 export default async function ExamResultPage({
   params,
@@ -152,10 +147,7 @@ export default async function ExamResultPage({
         <Button variant="outline" render={<Link href={`/exam/${examId}/review`} />}>
           Review Answers
         </Button>
-        <Button variant="outline" render={<Link href={`/api/exams/${examId}/download-paper`} />}>
-          <Download className="mr-1.5 h-3.5 w-3.5" />
-          Download Paper
-        </Button>
+        <DownloadPaperButton examId={examId} />
         <Button render={<Link href="/dashboard" />}>Back to Dashboard</Button>
       </div>
     </div>
