@@ -12,16 +12,16 @@ export function DownloadPaperButton({ examId }: { examId: string }) {
       const res = await fetch(`/api/exams/${examId}/download-paper`);
       const html = await res.text();
 
-      // Open in new window and trigger print (Save as PDF)
-      const printWindow = window.open("", "_blank");
-      if (printWindow) {
-        printWindow.document.write(html);
-        printWindow.document.close();
-        // Wait for content to render then trigger print
-        setTimeout(() => {
-          printWindow.print();
-        }, 500);
-      }
+      // Create a Blob and trigger download — works on mobile + desktop
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `exam-paper-${examId.slice(0, 8)}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (err) {
       alert("Failed to download paper");
     } finally {
