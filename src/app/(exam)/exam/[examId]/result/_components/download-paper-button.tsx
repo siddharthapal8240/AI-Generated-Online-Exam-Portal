@@ -31,36 +31,23 @@ interface PaperData {
   questions: QuestionData[];
 }
 
-/**
- * Clean text for PDF — remove problematic characters that jsPDF can't render.
- * Replaces math symbols with readable ASCII alternatives.
- */
-function cleanText(text: string): string {
-  return text
-    // Common math symbols to readable text
-    .replace(/\u221A/g, "sqrt") // √
-    .replace(/\u221B/g, "cbrt") // ∛
-    .replace(/\u00B2/g, "^2") // ²
-    .replace(/\u00B3/g, "^3") // ³
-    .replace(/\u00B9/g, "^1") // ¹
-    .replace(/\u2074/g, "^4") // ⁴
-    .replace(/\u2075/g, "^5") // ⁵
-    .replace(/\u00D7/g, "x") // ×
-    .replace(/\u00F7/g, "/") // ÷
-    .replace(/\u2260/g, "!=") // ≠
-    .replace(/\u2264/g, "<=") // ≤
-    .replace(/\u2265/g, ">=") // ≥
-    .replace(/\u2192/g, "->") // →
-    .replace(/\u2190/g, "<-") // ←
-    .replace(/\u221E/g, "infinity") // ∞
-    .replace(/\u03C0/g, "pi") // π
-    .replace(/\u00B0/g, " deg") // °
-    .replace(/\u20B9/g, "Rs.") // ₹
-    // Remove any remaining non-ASCII that jsPDF can't handle
-    .replace(/[^\x20-\x7E\n\r\t]/g, " ")
-    // Clean up multiple spaces
-    .replace(/  +/g, " ")
-    .trim();
+async function loadFont(doc: any) {
+  try {
+    const response = await fetch("/fonts/DejaVuSans.ttf");
+    const buffer = await response.arrayBuffer();
+    const binary = new Uint8Array(buffer);
+    let binaryString = "";
+    for (let i = 0; i < binary.length; i++) {
+      binaryString += String.fromCharCode(binary[i]);
+    }
+    const base64 = btoa(binaryString);
+    doc.addFileToVFS("DejaVuSans.ttf", base64);
+    doc.addFont("DejaVuSans.ttf", "DejaVu", "normal");
+    doc.addFont("DejaVuSans.ttf", "DejaVu", "bold");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function DownloadPaperButton({ examId }: { examId: string }) {
@@ -75,6 +62,10 @@ export function DownloadPaperButton({ examId }: { examId: string }) {
       const { jsPDF } = await import("jspdf");
       const doc = new jsPDF("portrait", "mm", "a4");
 
+      // Load Unicode font
+      const hasUnicodeFont = await loadFont(doc);
+      const fontName = hasUnicodeFont ? "DejaVu" : "helvetica";
+
       const pageW = doc.internal.pageSize.getWidth();
       const pageH = doc.internal.pageSize.getHeight();
       const margin = 14;
@@ -88,15 +79,15 @@ export function DownloadPaperButton({ examId }: { examId: string }) {
         }
       };
 
-      // ─── Title ──────────────────────────────────────────────────
+      // Title
       doc.setFontSize(16);
-      doc.setFont("helvetica", "bold");
+      doc.setFont(fontName, "bold");
       doc.setTextColor(30);
-      doc.text(cleanText(data.examTitle), margin, y);
+      doc.text(data.examTitle, margin, y);
       y += 7;
 
       doc.setFontSize(9);
-      doc.setFont("helvetica", "normal");
+      doc.setFont(fontName, "normal");
       doc.setTextColor(100);
       doc.text(
         `${data.userName}  |  ${data.duration} min  |  ${data.totalMarks} marks`,
@@ -105,8 +96,6 @@ export function DownloadPaperButton({ examId }: { examId: string }) {
       );
       y += 5;
 
-      // Score bar
-      doc.setFontSize(9);
       doc.setTextColor(22, 163, 74);
       doc.text(`Correct: ${data.totalCorrect}`, margin, y);
       doc.setTextColor(220, 38, 38);
@@ -120,41 +109,35 @@ export function DownloadPaperButton({ examId }: { examId: string }) {
       doc.line(margin, y, pageW - margin, y);
       y += 7;
 
-      // ─── Questions ──────────────────────────────────────────────
+      // Questions
       for (const q of data.questions) {
         checkPage(50);
 
-        // Q number + status
+        // Header
         doc.setFontSize(10);
-        doc.setFont("helvetica", "bold");
+        doc.setFont(fontName, "bold");
         doc.setTextColor(30);
-
         let header = `Q${q.sequenceNumber}.`;
         if (q.source === "PYQ" && q.pyqSource) {
-          header += `  [PYQ: ${cleanText(q.pyqSource)}]`;
+          header += `  [PYQ: ${q.pyqSource}]`;
         }
         doc.text(header, margin, y);
 
-        // Status on right
         const status = q.selectedOption
-          ? q.isCorrect
-            ? "Correct"
-            : "Wrong"
+          ? q.isCorrect ? "Correct" : "Wrong"
           : "Skipped";
-        doc.setFont("helvetica", "bold");
+        doc.setFont(fontName, "bold");
         if (q.isCorrect) doc.setTextColor(22, 163, 74);
         else if (q.selectedOption) doc.setTextColor(220, 38, 38);
         else doc.setTextColor(150);
-        const statusW = doc.getTextWidth(status);
-        doc.text(status, pageW - margin - statusW, y);
+        doc.text(status, pageW - margin - doc.getTextWidth(status), y);
         y += 5;
 
-        // Question text
-        doc.setFont("helvetica", "normal");
+        // Question text — Unicode renders properly with DejaVu font
+        doc.setFont(fontName, "normal");
         doc.setTextColor(40);
         doc.setFontSize(9.5);
-        const qText = cleanText(q.questionText);
-        const qLines = doc.splitTextToSize(qText, contentW);
+        const qLines = doc.splitTextToSize(q.questionText, contentW);
         checkPage(qLines.length * 4 + 30);
         doc.text(qLines, margin, y);
         y += qLines.length * 4 + 2;
@@ -174,7 +157,6 @@ export function DownloadPaperButton({ examId }: { examId: string }) {
 
           checkPage(7);
 
-          // Background highlight
           if (isRight) {
             doc.setFillColor(220, 252, 231);
             doc.roundedRect(margin, y - 3.5, contentW, 6, 1, 1, "F");
@@ -183,10 +165,14 @@ export function DownloadPaperButton({ examId }: { examId: string }) {
             doc.roundedRect(margin, y - 3.5, contentW, 6, 1, 1, "F");
           }
 
-          doc.setFont("helvetica", isRight ? "bold" : "normal");
-          doc.setTextColor(isRight ? 22 : isUserWrong ? 180 : 60, isRight ? 130 : isUserWrong ? 40 : 60, isRight ? 22 : isUserWrong ? 40 : 60);
+          doc.setFont(fontName, isRight ? "bold" : "normal");
+          doc.setTextColor(
+            isRight ? 22 : isUserWrong ? 180 : 60,
+            isRight ? 130 : isUserWrong ? 40 : 60,
+            isRight ? 22 : isUserWrong ? 40 : 60,
+          );
 
-          const optText = cleanText(`${opt.label}. ${opt.text}`);
+          const optText = `${opt.label}. ${opt.text}`;
           const optLines = doc.splitTextToSize(optText, contentW - 6);
           doc.text(optLines, margin + 3, y);
           y += optLines.length * 3.8 + 1.5;
@@ -195,7 +181,7 @@ export function DownloadPaperButton({ examId }: { examId: string }) {
         // Answer line
         y += 1;
         doc.setFontSize(8);
-        doc.setFont("helvetica", "normal");
+        doc.setFont(fontName, "normal");
         doc.setTextColor(120);
         doc.text(
           `Your answer: ${q.selectedOption || "--"}    Correct: ${q.correctOption}    Time: ${Math.round(q.timeSec)}s`,
@@ -206,8 +192,7 @@ export function DownloadPaperButton({ examId }: { examId: string }) {
 
         // Solution
         if (q.explanation && q.explanation.trim()) {
-          const solText = cleanText(q.explanation);
-          const solLines = doc.splitTextToSize(solText, contentW - 8);
+          const solLines = doc.splitTextToSize(q.explanation, contentW - 8);
           const solH = solLines.length * 3.3 + 7;
           checkPage(solH + 2);
 
@@ -215,17 +200,16 @@ export function DownloadPaperButton({ examId }: { examId: string }) {
           doc.roundedRect(margin, y - 1, contentW, solH, 1, 1, "F");
 
           doc.setFontSize(8);
-          doc.setFont("helvetica", "bold");
+          doc.setFont(fontName, "bold");
           doc.setTextColor(146, 64, 14);
           doc.text("Solution:", margin + 3, y + 3);
 
-          doc.setFont("helvetica", "normal");
+          doc.setFont(fontName, "normal");
           doc.setTextColor(100, 50, 10);
           doc.text(solLines, margin + 3, y + 7);
           y += solH + 3;
         }
 
-        // Divider between questions
         y += 2;
         doc.setDrawColor(230);
         doc.line(margin, y, pageW - margin, y);
@@ -236,9 +220,9 @@ export function DownloadPaperButton({ examId }: { examId: string }) {
       checkPage(8);
       doc.setTextColor(180);
       doc.setFontSize(7);
+      doc.setFont(fontName, "normal");
       doc.text("Generated by AI Exam Portal", pageW / 2, y, { align: "center" });
 
-      // Download
       const fileName = `${data.examTitle.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "_")}_paper.pdf`;
       doc.save(fileName);
     } catch (err) {
