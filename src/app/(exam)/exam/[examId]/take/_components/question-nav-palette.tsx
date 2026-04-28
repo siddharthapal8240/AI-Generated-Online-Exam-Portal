@@ -5,6 +5,7 @@ import {
   useExamSessionStore,
   type QuestionNavStatus,
 } from "@/stores/exam-session.store";
+import { useAnswerSync } from "@/lib/hooks/use-answer-sync";
 import { cn } from "@/lib/utils";
 import { QUESTION_STATUS_COLORS } from "@/lib/constants";
 import { LayoutGrid, X, ChevronUp } from "lucide-react";
@@ -25,7 +26,9 @@ function QuestionGrid({ onSelect }: { onSelect?: () => void }) {
     getAnsweredCount,
     getNotVisitedCount,
     getMarkedCount,
+    sessionId,
   } = useExamSessionStore();
+  const { saveAnswer } = useAnswerSync(sessionId);
 
   const notAnswered = questions.filter((q) => q.status === "VISITED").length;
 
@@ -72,6 +75,19 @@ function QuestionGrid({ onSelect }: { onSelect?: () => void }) {
               <button
                 key={q.examQuestionId}
                 onClick={() => {
+                  // Sync current question time before jumping
+                  const store = useExamSessionStore.getState();
+                  const curr = store.questions[store.currentQuestionIndex];
+                  if (curr) {
+                    const enteredAt = store.questionEnteredAt;
+                    const elapsed = enteredAt > 0 ? Math.max(0, (Date.now() - enteredAt) / 1000) : 0;
+                    saveAnswer({
+                      examQuestionId: curr.examQuestionId,
+                      selectedOption: curr.selectedOption,
+                      status: curr.status === "NOT_VISITED" ? "VISITED" : curr.status,
+                      timeSpentSec: curr.timeSpentSec + elapsed,
+                    });
+                  }
                   navigateTo(index);
                   onSelect?.();
                 }}

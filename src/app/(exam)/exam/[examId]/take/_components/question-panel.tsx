@@ -39,14 +39,33 @@ export function QuestionPanel() {
     });
   }
 
+  // Sync current question's time to server on every navigation
+  function syncCurrentQuestionTime() {
+    // Calculate latest time including current visit
+    const now = Date.now();
+    const store = useExamSessionStore.getState();
+    const enteredAt = store.questionEnteredAt;
+    const elapsed = enteredAt > 0 ? Math.max(0, (now - enteredAt) / 1000) : 0;
+    const totalTime = currentQ.timeSpentSec + elapsed;
+
+    saveAnswer({
+      examQuestionId: currentQ.examQuestionId,
+      selectedOption: currentQ.selectedOption,
+      status: currentQ.status === "NOT_VISITED" ? "VISITED" : currentQ.status,
+      timeSpentSec: totalTime,
+    });
+  }
+
   function handleSaveAndNext() {
     if (currentQuestionIndex < questions.length - 1) {
+      syncCurrentQuestionTime();
       navigateTo(currentQuestionIndex + 1);
     }
   }
 
   function handlePrevious() {
     if (currentQuestionIndex > 0) {
+      syncCurrentQuestionTime();
       navigateTo(currentQuestionIndex - 1);
     }
   }

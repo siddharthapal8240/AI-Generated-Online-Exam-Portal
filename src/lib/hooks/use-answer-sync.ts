@@ -14,20 +14,61 @@ export function useAnswerSync(sessionId: string | null) {
 
   const syncAnswers = useCallback(async () => {
     if (!sessionId) return;
-    const dirty = getDirtyAnswers();
-    if (dirty.length === 0) return;
 
-    try {
-      const res = await fetch(`/api/exam-session/${sessionId}/sync`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answers: dirty }),
-      });
-      if (res.ok) {
-        clearDirty();
+    // Always sync current question's accumulated time
+    const store = useExamSessionStore.getState();
+    const curr = store.questions[store.currentQuestionIndex];
+    if (curr && store.questionEnteredAt > 0) {
+      const elapsed = Math.max(0, (Date.now() - store.questionEnteredAt) / 1000);
+      const currentTimeAnswer = {
+        examQuestionId: curr.examQuestionId,
+        selectedOption: curr.selectedOption,
+        status: curr.status === "NOT_VISITED" ? "VISITED" : curr.status,
+        timeSpentSec: curr.timeSpentSec + elapsed,
+      };
+
+      // Add current question to dirty set if not already there
+      const dirty = getDirtyAnswers();
+      const alreadyInDirty = dirty.some(
+        (d) => d.examQuestionId === curr.examQuestionId,
+      );
+      const allAnswers = alreadyInDirty
+        ? dirty.map((d) =>
+            d.examQuestionId === curr.examQuestionId ? currentTimeAnswer : d,
+          )
+        : [...dirty, currentTimeAnswer];
+
+      if (allAnswers.length === 0) return;
+
+      try {
+        const res = await fetch(`/api/exam-session/${sessionId}/sync`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answers: allAnswers }),
+        });
+        if (res.ok) {
+          clearDirty();
+        }
+      } catch (error) {
+        console.error("Sync failed:", error);
       }
-    } catch (error) {
-      console.error("Sync failed:", error);
+    } else {
+      // No current question context — just sync dirty
+      const dirty = getDirtyAnswers();
+      if (dirty.length === 0) return;
+
+      try {
+        const res = await fetch(`/api/exam-session/${sessionId}/sync`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answers: dirty }),
+        });
+        if (res.ok) {
+          clearDirty();
+        }
+      } catch (error) {
+        console.error("Sync failed:", error);
+      }
     }
   }, [sessionId, getDirtyAnswers, clearDirty]);
 
