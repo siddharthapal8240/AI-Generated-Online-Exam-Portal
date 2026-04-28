@@ -1,6 +1,6 @@
 import { db } from "@/server/db";
-import { examResults, exams, users, examSessions, topicBreakdowns, examInvitations } from "@/server/schema";
-import { eq, desc, asc, and, count, avg, sql, max, min } from "drizzle-orm";
+import { examResults, exams, users, topicBreakdowns } from "@/server/schema";
+import { eq, desc, asc, and, count, avg, sql } from "drizzle-orm";
 
 // ─── Dashboard Overview ──────────────────────────────────────────────────────
 
@@ -214,14 +214,4 @@ export async function getParticipantsList(params: {
     pageSize,
     totalPages: Math.ceil((total[0]?.count ?? 0) / pageSize),
   };
-}
-
-// ─── Exam Results List ───────────────────────────────────────────────────────
-
-export async function getExamResultsList(examId: string) {
-  return db.query.examResults.findMany({
-    where: eq(examResults.examId, examId),
-    orderBy: [desc(examResults.totalScore)],
-    with: { user: true },
-  });
 }
