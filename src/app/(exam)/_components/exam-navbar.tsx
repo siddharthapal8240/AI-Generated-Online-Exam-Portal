@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
-import { GraduationCap, Home, History, BookX, Menu, X } from "lucide-react";
+import { GraduationCap, Home, History, BookX, FileDown, Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
@@ -11,6 +11,7 @@ const navItems = [
   { title: "Dashboard", href: "/dashboard", icon: Home },
   { title: "My Results", href: "/results", icon: History },
   { title: "My Mistakes", href: "/mistakes", icon: BookX },
+  { title: "My Papers", href: "/papers", icon: FileDown },
 ];
 
 export function ExamNavbar() {
