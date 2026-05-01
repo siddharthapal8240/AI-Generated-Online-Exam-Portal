@@ -16,7 +16,7 @@ import { TopicFilter } from "./_components/topic-filter";
 export default async function MistakesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ topic?: string; exam?: string }>;
+  searchParams: Promise<{ topic?: string; exam?: string; type?: string }>;
 }) {
   const clerkUser = await currentUser();
   if (!clerkUser) notFound();
@@ -28,13 +28,22 @@ export default async function MistakesPage({
   if (!dbUser) notFound();
 
   const params = await searchParams;
-  const [wrongQuestions, stats] = await Promise.all([
+  const [allQuestions, stats] = await Promise.all([
     getWrongQuestions(dbUser.id, {
       topicId: params.topic,
       examId: params.exam,
     }),
     getWrongQuestionStats(dbUser.id),
   ]);
+
+  // Apply type filter
+  const typeFilter = params.type || "all";
+  const wrongQuestions =
+    typeFilter === "wrong"
+      ? allQuestions.filter((q) => q.selectedOption !== null)
+      : typeFilter === "skipped"
+        ? allQuestions.filter((q) => q.selectedOption === null)
+        : allQuestions;
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-4 sm:p-6">
@@ -132,6 +141,9 @@ export default async function MistakesPage({
         exams={stats.byExam}
         activeTopic={params.topic}
         activeExam={params.exam}
+        activeType={typeFilter}
+        wrongCount={stats.totalWrong}
+        skippedCount={stats.totalSkipped}
       />
 
       {/* Questions List */}
