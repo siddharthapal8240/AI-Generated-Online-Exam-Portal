@@ -30,6 +30,7 @@ const topicTree: Record<string, string[]> = {
     "Probability",
     "Simplification & Approximation",
     "Quadratic Equations",
+    "Number System",
   ],
   "Reasoning Ability": [
     "Coding-Decoding",
