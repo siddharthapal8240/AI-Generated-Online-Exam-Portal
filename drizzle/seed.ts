@@ -21,7 +21,7 @@ const topicTree: Record<string, string[]> = {
     "SI/CI",
     "Time & Work",
     "Time Speed & Distance",
-    "Number Series",
+    "Number Series (Missing & Wrong Number)",
     "Data Interpretation",
     "Ratio & Proportion",
     "Average",
