@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { GraduationCap, Home, History, BookX, FileDown, Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { useState } from "react";
 
 const navItems = [
@@ -49,7 +50,8 @@ export function ExamNavbar() {
         </div>
 
         {/* Right side */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <ThemeToggle />
           <UserButton afterSignOutUrl="/" />
 
           {/* Mobile hamburger */}

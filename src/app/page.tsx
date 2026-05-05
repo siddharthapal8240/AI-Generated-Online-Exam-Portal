@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
 import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/layout/theme-toggle";
 import {
   GraduationCap,
   Brain,
@@ -27,7 +28,8 @@ export default async function HomePage() {
             <GraduationCap className="h-6 w-6 text-primary" />
             <span className="text-lg font-bold">AI Exam Portal</span>
           </Link>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <ThemeToggle />
             {isSignedIn ? (
               <Button size="sm" render={<Link href="/dashboard" />}>
                 Go to Dashboard
